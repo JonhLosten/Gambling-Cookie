@@ -10,7 +10,7 @@ import { clamp, deepClone } from "./utils.js";
 export const BUILDINGS = [
   {
     id: "student",
-    name: "Étudiant motivé",
+    name: "Newf",
     description: "+0,1 cookie / sec. Ramène ses potes en soirée.",
     baseCost: 15,
     baseCps: 0.1,
@@ -19,7 +19,7 @@ export const BUILDINGS = [
   },
   {
     id: "delegate",
-    name: "Délégué de promo",
+    name: "FI3",
     description: "+1 cookie / sec. Relaye l'info du BDE dans sa promo.",
     baseCost: 100,
     baseCps: 1,
@@ -28,7 +28,7 @@ export const BUILDINGS = [
   },
   {
     id: "club",
-    name: "Club associatif",
+    name: "FI4 de merde",
     description: "+5 cookies / sec. Organise ateliers et tournois.",
     baseCost: 550,
     baseCps: 5,
@@ -36,7 +36,7 @@ export const BUILDINGS = [
     order: 3,
   },
   {
-    id: "event",
+    id: "Tonus",
     name: "Événement BDE",
     description: "+20 cookies / sec. Soirées, LAN, tournois esport...",
     baseCost: 2200,
@@ -45,7 +45,7 @@ export const BUILDINGS = [
     order: 4,
   },
   {
-    id: "partner",
+    id: "Meudeuh",
     name: "Partenaire entreprise",
     description: "+80 cookies / sec. Sponsoring et lots à gagner.",
     baseCost: 9000,
@@ -54,7 +54,7 @@ export const BUILDINGS = [
     order: 5,
   },
   {
-    id: "festival",
+    id: "FIP",
     name: "Festival étudiant",
     description: "+320 cookies / sec. Le campus entier s'en souvient.",
     baseCost: 38000,
