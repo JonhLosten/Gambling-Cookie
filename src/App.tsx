@@ -792,6 +792,11 @@ const ACHIEVEMENTS: Achievement[] = [
 
 const DEFAULT_PLAYER_NAME = 'Invité';
 
+const sanitizePlayerName = (rawName?: string | null): string => {
+    const trimmed = (rawName ?? '').trim().slice(0, 16);
+    return trimmed || DEFAULT_PLAYER_NAME;
+};
+
 const defaultGameState: GameState = {
     cookies: 0,
     totalCookies: 0,
@@ -954,9 +959,9 @@ function safeMergeGameState(rawState: unknown): GameState {
             ...defaultGameState.gamblingStats,
             ...(parsed.gamblingStats ?? {}),
         },
-        playerName:
-            (parsed.playerName ?? defaultGameState.playerName).trim().slice(0, 16) ||
-            defaultGameState.playerName,
+        playerName: sanitizePlayerName(
+            parsed.playerName ?? defaultGameState.playerName,
+        ),
         leaderboard: (parsed.leaderboard ?? []).slice(0, 50),
         totalClicks: clampNumber(parsed.totalClicks ?? 0, 1e9),
         totalUpgradesPurchased: clampNumber(
@@ -1051,7 +1056,7 @@ async function pushWinToGlobalLeaderboard(
 ) {
     if (!user) return;
 
-    const safeName = (playerName || DEFAULT_PLAYER_NAME).trim().slice(0, 16);
+    const safeName = sanitizePlayerName(playerName);
     const safeScore = Math.max(0, Math.round(amount));
 
     if (!safeScore) return;
@@ -1146,8 +1151,7 @@ function App() {
                 authEmail.trim(),
                 authPassword,
             );
-            const displayName =
-                playerNameDraft.trim().slice(0, 16) || DEFAULT_PLAYER_NAME;
+            const displayName = sanitizePlayerName(playerNameDraft);
             await updateProfile(cred.user, { displayName });
             setAuthMessage('Compte créé et connecté.');
         } catch (error: any) {
@@ -1253,7 +1257,9 @@ function App() {
                 }
             }
 
-            const displayName = user.displayName?.slice(0, 16) ?? nextState.playerName;
+            const displayName = sanitizePlayerName(
+                user.displayName ?? nextState.playerName,
+            );
             setGame({ ...nextState, playerName: displayName });
             setPlayerNameDraft(displayName ?? DEFAULT_PLAYER_NAME);
             setAuthEmail('');
@@ -1546,8 +1552,7 @@ function App() {
 
     const handleSavePlayerName = () => {
         if (!ensureConnected()) return;
-        const trimmed = playerNameDraft.trim().slice(0, 16);
-        const safeName = trimmed || DEFAULT_PLAYER_NAME;
+        const safeName = sanitizePlayerName(playerNameDraft);
         setGame((prev) => ({
             ...prev,
             playerName: safeName,

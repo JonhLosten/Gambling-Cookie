@@ -6,9 +6,9 @@
     color-scheme: dark;
 }
 
-    :root[data-theme='light'] {
-        color-scheme: light;
-    }
+:root[data-theme='light'] {
+    color-scheme: light;
+}
 
 *,
 *::before,
