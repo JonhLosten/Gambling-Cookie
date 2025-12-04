@@ -1,4 +1,19 @@
-import { useEffect, useMemo, useState } from 'react';
+import React, {
+    useEffect,
+    useMemo,
+    useState,
+    useCallback,
+} from 'react';
+import {
+    collection,
+    addDoc,
+    serverTimestamp,
+    query,
+    orderBy,
+    limit,
+    onSnapshot,
+} from 'firebase/firestore';
+import { db } from './firebase';
 import './App.css';
 
 type Theme = 'light' | 'dark';
@@ -17,7 +32,15 @@ type UpgradeId =
     | 'sky-fortress'
     | 'visual-confetti'
     | 'visual-neon'
-    | 'visual-rainbow';
+    | 'visual-rainbow'
+    // nouveaux upgrades de clic manuel :
+    | 'silk-touch'
+    | 'gold-glove'
+    | 'quantum-finger'
+    | 'crit-click'
+    | 'click-frenzy';
+
+type CaseId = 'basic' | 'rare' | 'legendary';
 
 interface UpgradeDefinition {
     id: UpgradeId;
@@ -25,12 +48,16 @@ interface UpgradeDefinition {
     description: string;
     baseCost: number;
     cps: number;
-    clickBonus: number;
+    clickBonus: number; // bonus plat par clic
     unlockAt: number;
     emoji: string;
+    // Champs optionnels pour les upgrades avancés de clic :
+    clickPercentOfCps?: number; // ex : 0.01 = 1% du CPS par clic
+    critChanceBonus?: number; // +0.05 = +5% de chance de crit
+    critMultiplier?: number; // multiplicateur de crit (x5, etc.)
+    frenzyDurationSeconds?: number; // durée d’un buff de frénésie
+    frenzyClickMultiplier?: number; // multiplicateur de clic pendant frénésie
 }
-
-type CaseId = 'basic' | 'rare' | 'legendary';
 
 interface CaseDefinition {
     id: CaseId;
@@ -71,6 +98,12 @@ interface GamblingStats {
     biggestWin: number;
     highRollPlays: number;
     allInCount: number;
+    // nouveaux champs pour succès avancés :
+    consecutiveLosses: number;
+    maxConsecutiveLosses: number;
+    allInLosses: number;
+    jackpotStreak: number;
+    maxJackpotStreak: number;
 }
 
 interface LeaderboardEntry {
@@ -90,6 +123,9 @@ interface GameState {
     gamblingStats: GamblingStats;
     playerName: string;
     leaderboard: LeaderboardEntry[];
+    // nouveaux compteurs pour succès / équilibrage :
+    totalClicks: number;
+    totalUpgradesPurchased: number;
 }
 
 interface Achievement {
@@ -129,10 +165,21 @@ type OverlayState =
     | { kind: 'case'; result: LastCaseResult }
     | { kind: 'highroll'; result: LastHighRollResult };
 
+interface GlobalEntry {
+    id: string;
+    name: string;
+    score: number;
+    createdAt?: Date;
+}
+
 const STORAGE_KEY = 'imtmortels-cookie-clicker-v6';
 const COOKIE_KEY = 'imtmortels_cookie_save';
+const LAST_SYNCED_BEST_KEY = 'imtmortels_last_synced_best';
+
+const MIN_WHEEL_BET = 100;
 
 const UPGRADE_DEFINITIONS: UpgradeDefinition[] = [
+    // AUTOS / BUILDINGS
     {
         id: 'cursor',
         name: 'Curseur automatique',
@@ -167,8 +214,8 @@ const UPGRADE_DEFINITIONS: UpgradeDefinition[] = [
         id: 'cookie-farm',
         name: 'Ferme à cookies',
         description: 'Des champs entiers dédiés aux cookies.',
-        baseCost: 13_000,
-        cps: 65,
+        baseCost: 20_000,
+        cps: 60,
         clickBonus: 0,
         unlockAt: 5_000,
         emoji: '🌾',
@@ -177,8 +224,8 @@ const UPGRADE_DEFINITIONS: UpgradeDefinition[] = [
         id: 'factory',
         name: 'Usine à cookies',
         description: 'Industrialise totalement la production.',
-        baseCost: 120_000,
-        cps: 470,
+        baseCost: 300_000,
+        cps: 400,
         clickBonus: 0,
         unlockAt: 50_000,
         emoji: '🏭',
@@ -187,8 +234,8 @@ const UPGRADE_DEFINITIONS: UpgradeDefinition[] = [
         id: 'bank',
         name: 'Banque à cookies',
         description: 'Les intérêts composés… en cookies.',
-        baseCost: 1_400_000,
-        cps: 4_000,
+        baseCost: 3_000_000,
+        cps: 3_000,
         clickBonus: 0,
         unlockAt: 300_000,
         emoji: '🏦',
@@ -197,8 +244,8 @@ const UPGRADE_DEFINITIONS: UpgradeDefinition[] = [
         id: 'cookie-mine',
         name: 'Mine de cookies lunaires',
         description: 'Exploite des cookies directement sur la lune.',
-        baseCost: 20_000_000,
-        cps: 90_000,
+        baseCost: 40_000_000,
+        cps: 70_000,
         clickBonus: 0,
         unlockAt: 3_000_000,
         emoji: '🌙',
@@ -206,9 +253,9 @@ const UPGRADE_DEFINITIONS: UpgradeDefinition[] = [
     {
         id: 'sky-fortress',
         name: 'Forteresse céleste',
-        description: 'Une ville flottante dédiée à la production de cookies.',
-        baseCost: 200_000_000,
-        cps: 1_000_000,
+        description: 'Une ville flottante dédiée aux cookies.',
+        baseCost: 300_000_000,
+        cps: 800_000,
         clickBonus: 0,
         unlockAt: 20_000_000,
         emoji: '🏰',
@@ -217,8 +264,8 @@ const UPGRADE_DEFINITIONS: UpgradeDefinition[] = [
         id: 'portal',
         name: 'Portail dimensionnel',
         description: 'Ouvre un portail vers le monde des cookies.',
-        baseCost: 1_000_000_000,
-        cps: 6_000_000,
+        baseCost: 1_500_000_000,
+        cps: 5_000_000,
         clickBonus: 0,
         unlockAt: 200_000_000,
         emoji: '🌀',
@@ -227,28 +274,85 @@ const UPGRADE_DEFINITIONS: UpgradeDefinition[] = [
         id: 'time-machine',
         name: 'Machine à remonter le temps',
         description: 'Produisait déjà des cookies hier.',
-        baseCost: 12_000_000_000,
-        cps: 65_000_000,
+        baseCost: 15_000_000_000,
+        cps: 55_000_000,
         clickBonus: 0,
         unlockAt: 2_000_000_000,
         emoji: '⌛',
     },
+    // UPGRADE HISTORIQUE DE CLIC
     {
         id: 'golden-hand',
         name: 'Doigt en or',
-        description: 'Chaque clic vaut beaucoup plus.',
-        baseCost: 200,
+        description: 'Chaque clic vaut davantage.',
+        baseCost: 300,
         cps: 0,
         clickBonus: 1,
-        unlockAt: 100,
+        unlockAt: 150,
         emoji: '☝️',
     },
-    // Cosmétiques : modifient l’apparence et les animations
+    // NOUVELLES AMÉLIORATIONS DE CLIC MANUEL
+    {
+        id: 'silk-touch',
+        name: 'Toucher de soie',
+        description: '+1 cookie par clic. Simple et efficace.',
+        baseCost: 500,
+        cps: 0,
+        clickBonus: 1,
+        unlockAt: 300,
+        emoji: '🧤',
+    },
+    {
+        id: 'gold-glove',
+        name: 'Gant doré',
+        description: '+5 cookies par clic.',
+        baseCost: 5_000,
+        cps: 0,
+        clickBonus: 5,
+        unlockAt: 2_000,
+        emoji: '🥊',
+    },
+    {
+        id: 'quantum-finger',
+        name: 'Doigt quantique',
+        description: 'Ton clic vaut aussi 1% de ton CPS.',
+        baseCost: 50_000,
+        cps: 0,
+        clickBonus: 0,
+        unlockAt: 25_000,
+        emoji: '🧬',
+        clickPercentOfCps: 0.01,
+    },
+    {
+        id: 'crit-click',
+        name: 'Clic critique',
+        description: '5% de chance par niveau de faire un clic x5.',
+        baseCost: 80_000,
+        cps: 0,
+        clickBonus: 0,
+        unlockAt: 40_000,
+        emoji: '💥',
+        critChanceBonus: 0.05,
+        critMultiplier: 5,
+    },
+    {
+        id: 'click-frenzy',
+        name: 'Frénésie de clic',
+        description: 'Active un buff temporaire de clic surpuissant.',
+        baseCost: 150_000,
+        cps: 0,
+        clickBonus: 0,
+        unlockAt: 75_000,
+        emoji: '⚡',
+        frenzyDurationSeconds: 25,
+        frenzyClickMultiplier: 6,
+    },
+    // Cosmétiques
     {
         id: 'visual-confetti',
         name: 'Confettis festifs',
-        description: 'Ajoute des confettis sur les gros gains (cosmétique).',
-        baseCost: 50_000,
+        description: 'Confettis sur les gros gains (cosmétique).',
+        baseCost: 60_000,
         cps: 0,
         clickBonus: 0,
         unlockAt: 20_000,
@@ -258,7 +362,7 @@ const UPGRADE_DEFINITIONS: UpgradeDefinition[] = [
         id: 'visual-neon',
         name: 'Néons du casino',
         description: 'Glow néon sur les cartes du casino (cosmétique).',
-        baseCost: 120_000,
+        baseCost: 150_000,
         cps: 0,
         clickBonus: 0,
         unlockAt: 40_000,
@@ -267,14 +371,59 @@ const UPGRADE_DEFINITIONS: UpgradeDefinition[] = [
     {
         id: 'visual-rainbow',
         name: 'Cookie arc-en-ciel',
-        description: 'Le cookie et la roue deviennent arc-en-ciel (cosmétique).',
-        baseCost: 400_000,
+        description: 'Le cookie et la roue deviennent arc-en-ciel.',
+        baseCost: 450_000,
         cps: 0,
         clickBonus: 0,
         unlockAt: 150_000,
         emoji: '🌈',
     },
 ];
+
+// Catégories d'améliorations pour le menu à 3 onglets
+type UpgradeCategoryId = 'auto' | 'click' | 'cosmetic';
+
+const UPGRADE_CATEGORIES: {
+    id: UpgradeCategoryId;
+    label: string;
+    description: string;
+}[] = [
+        {
+            id: 'auto',
+            label: 'Production automatique',
+            description: 'Génère des cookies en continu.',
+        },
+        {
+            id: 'click',
+            label: 'Clic manuel',
+            description: 'Rend chaque clic plus puissant.',
+        },
+        {
+            id: 'cosmetic',
+            label: 'Cosmétiques',
+            description: 'Uniquement visuel, pour styliser ton cookie.',
+        },
+    ];
+
+// Répartition des upgrades par catégorie (en fonction des stats)
+const UPGRADE_DEFINITIONS_BY_CATEGORY: Record<
+    UpgradeCategoryId,
+    UpgradeDefinition[]
+> = {
+    auto: [],
+    click: [],
+    cosmetic: [],
+};
+
+for (const upgrade of UPGRADE_DEFINITIONS) {
+    if (upgrade.cps > 0) {
+        UPGRADE_DEFINITIONS_BY_CATEGORY.auto.push(upgrade);
+    } else if (upgrade.clickBonus > 0) {
+        UPGRADE_DEFINITIONS_BY_CATEGORY.click.push(upgrade);
+    } else {
+        UPGRADE_DEFINITIONS_BY_CATEGORY.cosmetic.push(upgrade);
+    }
+}
 
 const CASE_DEFINITIONS: CaseDefinition[] = [
     {
@@ -283,23 +432,23 @@ const CASE_DEFINITIONS: CaseDefinition[] = [
         description: 'Petit loot sympa, parfait pour commencer.',
         cost: 1_000,
         emoji: '📦',
-        minMultiplier: 0.8,
-        maxMultiplier: 2.5,
+        minMultiplier: 0.9,
+        maxMultiplier: 2.2,
         jackpotMultiplier: 10,
-        jackpotChance: 0.04,
-        failMultiplier: 0.3,
+        jackpotChance: 0.03,
+        failMultiplier: 0.25,
     },
     {
         id: 'rare',
         name: 'Caisse rare',
-        description: 'Récompenses plus grosses, mais plus risqué.',
+        description: 'Récompenses plus grosses, mais plus risquées.',
         cost: 7_500,
         emoji: '🧰',
-        minMultiplier: 0.7,
-        maxMultiplier: 3.5,
-        jackpotMultiplier: 18,
-        jackpotChance: 0.06,
-        failMultiplier: 0.25,
+        minMultiplier: 0.8,
+        maxMultiplier: 3.0,
+        jackpotMultiplier: 16,
+        jackpotChance: 0.05,
+        failMultiplier: 0.22,
     },
     {
         id: 'legendary',
@@ -307,30 +456,37 @@ const CASE_DEFINITIONS: CaseDefinition[] = [
         description: 'Pour les vrais parieurs : gros risques, gros gains.',
         cost: 50_000,
         emoji: '🗝️',
-        minMultiplier: 0.6,
-        maxMultiplier: 4,
-        jackpotMultiplier: 25,
-        jackpotChance: 0.08,
+        minMultiplier: 0.7,
+        maxMultiplier: 3.8,
+        jackpotMultiplier: 24,
+        jackpotChance: 0.06,
         failMultiplier: 0.2,
     },
 ];
 
-const MIN_WHEEL_BET = 100;
-
+// Roue rééquilibrée : espérance légèrement négative (~0.85-0.9)
 const WHEEL_SEGMENTS: WheelSegment[] = [
     {
-        id: 'lose',
-        label: 'Perdu',
-        description: 'Tu perds ta mise en cookies.',
-        weight: 24,
+        id: 'lose-all',
+        label: 'Tout perdu',
+        description: 'Tu perds ta mise entière.',
+        weight: 32,
         kind: 'cookies',
         cookiesMultiplier: 0,
     },
     {
+        id: 'lose-half',
+        label: '-50 %',
+        description: 'Tu ne récupères que la moitié de ta mise.',
+        weight: 18,
+        kind: 'cookies',
+        cookiesMultiplier: 0.5,
+    },
+    {
         id: 'refund',
         label: 'Remboursé',
-        description: 'Tu récupères exactement ta mise.',
-        weight: 12,
+        description: 'Tu récupères ta mise.',
+        weight: 20,
         kind: 'cookies',
         cookiesMultiplier: 1,
     },
@@ -338,7 +494,7 @@ const WHEEL_SEGMENTS: WheelSegment[] = [
         id: 'small-win',
         label: '+50 %',
         description: 'Petit bénéfice sur ta mise.',
-        weight: 8,
+        weight: 14,
         kind: 'cookies',
         cookiesMultiplier: 1.5,
     },
@@ -346,7 +502,7 @@ const WHEEL_SEGMENTS: WheelSegment[] = [
         id: 'double',
         label: 'x2',
         description: 'Tu doubles ta mise.',
-        weight: 5,
+        weight: 8,
         kind: 'cookies',
         cookiesMultiplier: 2,
     },
@@ -354,15 +510,15 @@ const WHEEL_SEGMENTS: WheelSegment[] = [
         id: 'jackpot',
         label: 'Jackpot',
         description: 'Énorme pluie de cookies !',
-        weight: 1,
+        weight: 2,
         kind: 'cookies',
-        cookiesMultiplier: 4,
+        cookiesMultiplier: 6,
     },
     {
         id: 'rush-cps',
         label: 'Rush de production',
         description: 'CPS x2 pendant 30 secondes.',
-        weight: 6,
+        weight: 5,
         kind: 'buff',
         cookiesMultiplier: 1,
         buffCpsMultiplier: 2,
@@ -373,7 +529,7 @@ const WHEEL_SEGMENTS: WheelSegment[] = [
         id: 'rush-click',
         label: 'Doigt en feu',
         description: 'Cookies par clic x3 pendant 20 secondes.',
-        weight: 6,
+        weight: 5,
         kind: 'buff',
         cookiesMultiplier: 1,
         buffCpsMultiplier: 1,
@@ -383,6 +539,7 @@ const WHEEL_SEGMENTS: WheelSegment[] = [
 ];
 
 const ACHIEVEMENTS: Achievement[] = [
+    // Progression cookies
     {
         id: 'first-cookie',
         label: 'Premier cookie !',
@@ -419,6 +576,26 @@ const ACHIEVEMENTS: Achievement[] = [
         description: 'Atteins 1 000 000 000 cookies au total.',
         check: (state) => state.totalCookies >= 1_000_000_000,
     },
+    // Cliques totaux
+    {
+        id: 'click-100',
+        label: 'Tapoteur',
+        description: 'Clique 100 fois sur le cookie.',
+        check: (state) => (state.totalClicks ?? 0) >= 100,
+    },
+    {
+        id: 'click-1k',
+        label: 'Mitraillette à clics',
+        description: 'Clique 1 000 fois sur le cookie.',
+        check: (state) => (state.totalClicks ?? 0) >= 1_000,
+    },
+    {
+        id: 'click-100k',
+        label: 'Doigt bionique',
+        description: 'Clique 100 000 fois sur le cookie.',
+        check: (state) => (state.totalClicks ?? 0) >= 100_000,
+    },
+    // Upgrades
     {
         id: 'first-upgrade',
         label: 'Premier investissement',
@@ -429,23 +606,63 @@ const ACHIEVEMENTS: Achievement[] = [
     {
         id: 'upgrade-collector',
         label: 'Collectionneur',
-        description: 'Achète au moins 10 améliorations au total.',
+        description: 'Achète au moins 10 améliorations.',
         check: (state) =>
-            Object.values(state.upgrades).reduce((sum, q) => sum + (q || 0), 0) >= 10,
+            Object.values(state.upgrades).reduce(
+                (sum, q) => sum + (q || 0),
+                0,
+            ) >= 10,
     },
     {
         id: 'upgrade-tycoon',
         label: 'Tycoon des upgrades',
-        description: 'Achète au moins 50 améliorations au total.',
+        description: 'Achète au moins 50 améliorations.',
         check: (state) =>
-            Object.values(state.upgrades).reduce((sum, q) => sum + (q || 0), 0) >= 50,
+            Object.values(state.upgrades).reduce(
+                (sum, q) => sum + (q || 0),
+                0,
+            ) >= 50,
     },
+    {
+        id: 'upgrade-mogul',
+        label: 'Mogul du clic',
+        description: 'Achète au moins 10 upgrades de clic manuel.',
+        check: (state) => {
+            const ids: UpgradeId[] = [
+                'golden-hand',
+                'silk-touch',
+                'gold-glove',
+                'quantum-finger',
+                'crit-click',
+                'click-frenzy',
+            ];
+            const total = ids.reduce(
+                (sum, id) => sum + (state.upgrades[id] ?? 0),
+                0,
+            );
+            return total >= 10;
+        },
+    },
+    // CPS
     {
         id: 'ten-cps',
         label: 'Production automatique',
         description: 'Atteins 10 cookies par seconde.',
         check: (_state, effectiveCps) => effectiveCps >= 10,
     },
+    {
+        id: 'hundred-cps',
+        label: 'Usine en marche',
+        description: 'Atteins 100 cookies par seconde.',
+        check: (_state, effectiveCps) => effectiveCps >= 100,
+    },
+    {
+        id: 'thousand-cps',
+        label: 'Dimension industrielle',
+        description: 'Atteins 1 000 cookies par seconde.',
+        check: (_state, effectiveCps) => effectiveCps >= 1_000,
+    },
+    // Casino – roue
     {
         id: 'first-spin',
         label: 'Parieur en herbe',
@@ -464,6 +681,7 @@ const ACHIEVEMENTS: Achievement[] = [
         description: 'Joue 50 fois à la roue.',
         check: (state) => state.gamblingStats.spinsPlayed >= 50,
     },
+    // Casino – lootboxes
     {
         id: 'first-case',
         label: 'Ouvre-boîte',
@@ -482,17 +700,73 @@ const ACHIEVEMENTS: Achievement[] = [
         description: 'Ouvre 50 caisses.',
         check: (state) => state.gamblingStats.casesOpened >= 50,
     },
+    // High roll
     {
         id: 'high-roller',
         label: 'Gros coup',
-        description: 'Gagne au moins 50 000 cookies en un seul coup de chance.',
+        description:
+            'Gagne au moins 50 000 cookies en un seul coup de chance.',
         check: (state) => state.gamblingStats.biggestWin >= 50_000,
     },
     {
         id: 'all-in',
         label: 'All-in courageux',
-        description: 'Tente au moins un all-in dans le casino.',
+        description: 'Tente au moins un all-in.',
         check: (state) => state.gamblingStats.allInCount >= 1,
+    },
+    {
+        id: 'all-in-lost',
+        label: 'All-in suicidaire',
+        description: 'Perdre au moins un all-in.',
+        check: (state) => state.gamblingStats.allInLosses >= 1,
+    },
+    // Streaks
+    {
+        id: 'loss-streak-5',
+        label: 'Série noire',
+        description: 'Perds 5 coups de casino d’affilée.',
+        check: (state) => state.gamblingStats.maxConsecutiveLosses >= 5,
+    },
+    {
+        id: 'loss-streak-10',
+        label: 'Malédiction du casino',
+        description: 'Perds 10 coups de casino d’affilée.',
+        check: (state) => state.gamblingStats.maxConsecutiveLosses >= 10,
+    },
+    {
+        id: 'jackpot-streak-2',
+        label: 'Double jackpot',
+        description: 'Réalise 2 jackpots casino consécutifs.',
+        check: (state) => state.gamblingStats.maxJackpotStreak >= 2,
+    },
+    // Patience / challenge
+    {
+        id: 'patience',
+        label: 'Patience infinie',
+        description:
+            'Atteins 1 000 000 de cookies sans jamais aller au casino.',
+        check: (state) =>
+            state.totalCookies >= 1_000_000 &&
+            state.gamblingStats.spinsPlayed === 0 &&
+            state.gamblingStats.casesOpened === 0 &&
+            state.gamblingStats.highRollPlays === 0,
+    },
+    {
+        id: 'challenge-clean',
+        label: 'Casino maîtrisé',
+        description:
+            'Gagne au moins 100 000 cookies au total en casino sans ruiner ton stock (jamais moins de 0).',
+        check: (state) =>
+            state.gamblingStats.biggestWin >= 100_000 &&
+            state.cookies > 0,
+    },
+    {
+        id: 'total-ruin',
+        label: 'Ruine totale',
+        description:
+            'Perds tout au casino après avoir gagné au moins 50 000 cookies.',
+        check: (state) =>
+            state.cookies <= 0 && state.gamblingStats.biggestWin >= 50_000,
     },
 ];
 
@@ -514,6 +788,11 @@ const defaultGameState: GameState = {
         'visual-confetti': 0,
         'visual-neon': 0,
         'visual-rainbow': 0,
+        'silk-touch': 0,
+        'gold-glove': 0,
+        'quantum-finger': 0,
+        'crit-click': 0,
+        'click-frenzy': 0,
     },
     theme: 'dark',
     activeBuffs: [],
@@ -523,9 +802,16 @@ const defaultGameState: GameState = {
         biggestWin: 0,
         highRollPlays: 0,
         allInCount: 0,
+        consecutiveLosses: 0,
+        maxConsecutiveLosses: 0,
+        allInLosses: 0,
+        jackpotStreak: 0,
+        maxJackpotStreak: 0,
     },
     playerName: '',
     leaderboard: [],
+    totalClicks: 0,
+    totalUpgradesPurchased: 0,
 };
 
 function formatNumber(value: number, decimals = 1): string {
@@ -551,13 +837,14 @@ function formatNumber(value: number, decimals = 1): string {
 
 function pickWeighted<T extends { weight: number }>(items: T[]): T {
     const totalWeight = items.reduce((sum, item) => sum + item.weight, 0);
-    let roll = Math.random() * totalWeight;
-
+    const roll = Math.random() * totalWeight;
+    let acc = 0;
     for (const item of items) {
-        if (roll < item.weight) return item;
-        roll -= item.weight;
+        acc += item.weight;
+        if (roll <= acc) {
+            return item;
+        }
     }
-
     return items[items.length - 1];
 }
 
@@ -571,31 +858,40 @@ function computeBaseCps(state: GameState): number {
 function computeEffectiveCps(state: GameState): number {
     const base = computeBaseCps(state);
     if (state.activeBuffs.length === 0) return base;
-
     const multiplier = state.activeBuffs.reduce(
         (acc, buff) => acc * (buff.multiplierCps || 1),
         1,
     );
-
     return base * multiplier;
 }
 
 function computeCookiesPerClick(state: GameState): number {
-    const baseClick =
+    const flatBonus =
         1 +
         UPGRADE_DEFINITIONS.reduce((acc, def) => {
             const quantity = state.upgrades[def.id] ?? 0;
             return acc + def.clickBonus * quantity;
         }, 0);
 
-    if (state.activeBuffs.length === 0) return baseClick;
+    const cps = computeEffectiveCps(state);
 
-    const multiplier = state.activeBuffs.reduce(
-        (acc, buff) => acc * (buff.multiplierClick || 1),
-        1,
-    );
+    const percentBonus = UPGRADE_DEFINITIONS.reduce((acc, def) => {
+        const quantity = state.upgrades[def.id] ?? 0;
+        if (!def.clickPercentOfCps) return acc;
+        return acc + def.clickPercentOfCps * quantity;
+    }, 0);
 
-    return baseClick * multiplier;
+    let baseClick = flatBonus + cps * percentBonus;
+
+    if (state.activeBuffs.length > 0) {
+        const clickMultiplier = state.activeBuffs.reduce(
+            (acc, buff) => acc * (buff.multiplierClick || 1),
+            1,
+        );
+        baseClick *= clickMultiplier;
+    }
+
+    return baseClick;
 }
 
 function readCookie(name: string): string | null {
@@ -606,58 +902,67 @@ function readCookie(name: string): string | null {
     return match ? decodeURIComponent(match.split('=')[1]) : null;
 }
 
+function safeMergeGameState(rawState: unknown): GameState {
+    const parsed = rawState as Partial<GameState> & { lastSaved?: number };
+    const merged: GameState = {
+        ...defaultGameState,
+        ...parsed,
+        upgrades: {
+            ...defaultGameState.upgrades,
+            ...(parsed.upgrades ?? {}),
+        },
+        activeBuffs: parsed.activeBuffs ?? [],
+        gamblingStats: {
+            ...defaultGameState.gamblingStats,
+            ...(parsed.gamblingStats ?? {}),
+        },
+        playerName: parsed.playerName ?? '',
+        leaderboard: parsed.leaderboard ?? [],
+        totalClicks: parsed.totalClicks ?? 0,
+        totalUpgradesPurchased: parsed.totalUpgradesPurchased ?? 0,
+    };
+
+    const lastSaved = (rawState as { lastSaved?: number }).lastSaved;
+    if (typeof lastSaved === 'number') {
+        const elapsedSeconds = (Date.now() - lastSaved) / 1000;
+        // progression offline basée sur le CPS de base, pas les buffs
+        const cps = computeBaseCps(merged);
+        const gained = Math.max(0, cps * elapsedSeconds);
+
+        return {
+            ...merged,
+            cookies: merged.cookies + gained,
+            totalCookies: merged.totalCookies + gained,
+            activeBuffs: merged.activeBuffs.filter(
+                (buff) => buff.expiresAt > Date.now(),
+            ),
+        };
+    }
+
+    return merged;
+}
+
 function loadGameState(): GameState {
     if (typeof window === 'undefined') return { ...defaultGameState };
 
-    const safeMerge = (rawState: unknown): GameState => {
-        const parsed = rawState as Partial<GameState> & { lastSaved?: number };
-        const merged: GameState = {
-            ...defaultGameState,
-            ...parsed,
-            upgrades: {
-                ...defaultGameState.upgrades,
-                ...(parsed.upgrades ?? {}),
-            },
-            activeBuffs: parsed.activeBuffs ?? [],
-            gamblingStats: {
-                ...defaultGameState.gamblingStats,
-                ...(parsed.gamblingStats ?? {}),
-            },
-            playerName: parsed.playerName ?? '',
-            leaderboard: parsed.leaderboard ?? [],
-        };
-
-        const lastSaved = (rawState as { lastSaved?: number }).lastSaved;
-        if (typeof lastSaved === 'number') {
-            const elapsedSeconds = (Date.now() - lastSaved) / 1000;
-            const cps = computeBaseCps(merged);
-            const gained = Math.max(0, cps * elapsedSeconds);
-
-            return {
-                ...merged,
-                cookies: merged.cookies + gained,
-                totalCookies: merged.totalCookies + gained,
-                activeBuffs: merged.activeBuffs.filter(
-                    (buff) => buff.expiresAt > Date.now(),
-                ),
-            };
-        }
-
-        return merged;
-    };
-
     try {
-        const raw = localStorage.getItem(STORAGE_KEY);
-        if (raw) return safeMerge(JSON.parse(raw));
+        const local = window.localStorage.getItem(STORAGE_KEY);
+        if (local) {
+            const parsed = JSON.parse(local);
+            return safeMergeGameState(parsed);
+        }
     } catch (error) {
-        console.error('Erreur lors du chargement localStorage :', error);
+        console.error('Erreur de chargement depuis localStorage :', error);
     }
 
     try {
         const cookieValue = readCookie(COOKIE_KEY);
-        if (cookieValue) return safeMerge(JSON.parse(cookieValue));
+        if (cookieValue) {
+            const parsed = JSON.parse(cookieValue);
+            return safeMergeGameState(parsed);
+        }
     } catch (error) {
-        console.error('Erreur lors du chargement via cookie :', error);
+        console.error('Erreur de chargement depuis cookie :', error);
     }
 
     return { ...defaultGameState };
@@ -684,12 +989,56 @@ function persistGame(state: GameState) {
             )};path=/;max-age=31536000`;
         }
     } catch (error) {
-        console.error('Erreur de sauvegarde dans les cookies :', error);
+        console.error('Erreur de sauvegarde cookie :', error);
     }
 }
 
+async function pushWinToGlobalLeaderboard(
+    playerName: string,
+    amount: number,
+) {
+    const safeName = (playerName || 'Invité').trim().slice(0, 16);
+    const safeScore = Math.max(0, Math.round(amount));
+
+    if (!safeScore) return;
+    // Anti-cheat basique : valeurs absurdes ignorées
+    if (!Number.isFinite(safeScore) || safeScore > 1e15) return;
+
+    try {
+        await addDoc(collection(db, 'leaderboard'), {
+            name: safeName,
+            score: safeScore,
+            createdAt: serverTimestamp(),
+        });
+    } catch (error) {
+        console.error('Erreur envoi leaderboard :', error);
+    }
+}
+
+function clamp(value: number, min: number, max: number): number {
+    return Math.min(max, Math.max(min, value));
+}
+
+function pruneExpiredBuffs(buffs: ActiveBuff[]): ActiveBuff[] {
+    const now = Date.now();
+    return buffs.filter((b) => b.expiresAt > now);
+}
+
+type InfoTabId = 'upgrades' | 'achievements' | 'leaderboard';
+
 function App() {
     const [game, setGame] = useState<GameState>(() => loadGameState());
+
+    const [globalLeaderboard, setGlobalLeaderboard] = useState<GlobalEntry[]>(
+        [],
+    );
+    const [lastSyncedBestWin, setLastSyncedBestWin] = useState<number>(() => {
+        if (typeof window === 'undefined') return 0;
+        const raw = window.localStorage.getItem(LAST_SYNCED_BEST_KEY);
+        const value = raw ? Number(raw) : 0;
+        return Number.isFinite(value) && value > 0 ? value : 0;
+    });
+
     const [isCookiePressed, setIsCookiePressed] = useState(false);
     const [isWheelSpinning, setIsWheelSpinning] = useState(false);
     const [openingCaseId, setOpeningCaseId] = useState<CaseId | null>(null);
@@ -702,8 +1051,16 @@ function App() {
     const [wheelBet, setWheelBet] = useState<number>(500);
     const [overlay, setOverlay] = useState<OverlayState>(null);
 
+    const [selectedUpgradeCategory, setSelectedUpgradeCategory] =
+        useState<UpgradeCategoryId>('auto');
+
+    const [activeInfoTab, setActiveInfoTab] =
+        useState<InfoTabId>('upgrades');
+
     const [isPlayerModalOpen, setIsPlayerModalOpen] = useState(false);
-    const [playerNameDraft, setPlayerNameDraft] = useState(game.playerName || '');
+    const [playerNameDraft, setPlayerNameDraft] = useState(
+        game.playerName || '',
+    );
 
     const baseCps = useMemo(() => computeBaseCps(game), [game]);
     const effectiveCps = useMemo(() => computeEffectiveCps(game), [game]);
@@ -744,19 +1101,24 @@ function App() {
         () =>
             [...game.leaderboard]
                 .sort((a, b) => b.amount - a.amount)
-                .slice(0, 5),
+                .slice(0, 10),
         [game.leaderboard],
+    );
+
+    const globalTop3 = useMemo(
+        () => globalLeaderboard.slice(0, 3),
+        [globalLeaderboard],
+    );
+    const globalRest = useMemo(
+        () => globalLeaderboard.slice(3),
+        [globalLeaderboard],
     );
 
     // Production automatique
     useEffect(() => {
         const interval = window.setInterval(() => {
             setGame((prev) => {
-                const now = Date.now();
-                const activeBuffs = prev.activeBuffs.filter(
-                    (buff) => buff.expiresAt > now,
-                );
-
+                const activeBuffs = pruneExpiredBuffs(prev.activeBuffs);
                 const stateWithBuffs: GameState =
                     activeBuffs === prev.activeBuffs
                         ? prev
@@ -797,13 +1159,80 @@ function App() {
         }
     }, [game.playerName]);
 
+    // Sync meilleur gain local -> Firestore
+    useEffect(() => {
+        const best = game.gamblingStats.biggestWin;
+        if (best <= 0 || best === lastSyncedBestWin) return;
+
+        const maxReasonable = Math.max(1e6, game.totalCookies * 10);
+        if (!Number.isFinite(best) || best > maxReasonable) {
+            return;
+        }
+
+        setLastSyncedBestWin(best);
+        if (typeof window !== 'undefined') {
+            try {
+                window.localStorage.setItem(LAST_SYNCED_BEST_KEY, String(best));
+            } catch {
+                // ignore
+            }
+        }
+
+        void pushWinToGlobalLeaderboard(game.playerName, best);
+    }, [
+        game.gamblingStats.biggestWin,
+        game.playerName,
+        game.totalCookies,
+        lastSyncedBestWin,
+    ]);
+
+    // Listener Firestore unique pour le leaderboard global
+    useEffect(() => {
+        const lbRef = collection(db, 'leaderboard');
+        const q = query(lbRef, orderBy('score', 'desc'), limit(20));
+
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            const entries: GlobalEntry[] = snapshot.docs.map((doc) => {
+                const data = doc.data() as any;
+                return {
+                    id: doc.id,
+                    name: data.name ?? '???',
+                    score: data.score ?? 0,
+                    createdAt: data.createdAt?.toDate
+                        ? data.createdAt.toDate()
+                        : undefined,
+                };
+            });
+            setGlobalLeaderboard(entries);
+        });
+
+        return () => unsubscribe();
+    }, []);
+
     const handleCookieClick = () => {
         setGame((prev) => {
-            const gain = computeCookiesPerClick(prev);
+            const baseGain = computeCookiesPerClick(prev);
+            let gain = baseGain;
+
+            // Clic critique
+            const critUpgrades = prev.upgrades['crit-click'] ?? 0;
+            if (critUpgrades > 0) {
+                const def = UPGRADE_DEFINITIONS.find(
+                    (u) => u.id === 'crit-click',
+                );
+                const perLevel = def?.critChanceBonus ?? 0.05;
+                const critMultiplier = def?.critMultiplier ?? 5;
+                const chance = clamp(perLevel * critUpgrades, 0, 0.5);
+                if (Math.random() < chance) {
+                    gain *= critMultiplier;
+                }
+            }
+
             return {
                 ...prev,
                 cookies: prev.cookies + gain,
                 totalCookies: prev.totalCookies + gain,
+                totalClicks: (prev.totalClicks ?? 0) + 1,
             };
         });
 
@@ -811,21 +1240,55 @@ function App() {
         window.setTimeout(() => setIsCookiePressed(false), 120);
     };
 
+    const applyFrenzyBuffIfNeeded = useCallback(
+        (upgrade: UpgradeDefinition, prev: GameState): GameState => {
+            if (upgrade.id !== 'click-frenzy') return prev;
+            if (
+                !upgrade.frenzyDurationSeconds ||
+                !upgrade.frenzyClickMultiplier
+            )
+                return prev;
+
+            const now = Date.now();
+            const buff: ActiveBuff = {
+                id: `frenzy-${now}`,
+                label: 'Frénésie de clic',
+                multiplierCps: 1,
+                multiplierClick: upgrade.frenzyClickMultiplier,
+                expiresAt: now + upgrade.frenzyDurationSeconds * 1000,
+            };
+
+            const activeBuffs = pruneExpiredBuffs(prev.activeBuffs);
+            return {
+                ...prev,
+                activeBuffs: [...activeBuffs, buff],
+            };
+        },
+        [],
+    );
+
     const handleBuyUpgrade = (upgrade: UpgradeDefinition) => {
         setGame((prev) => {
+            if (prev.totalCookies < upgrade.unlockAt) return prev;
+
             const quantity = prev.upgrades[upgrade.id] ?? 0;
-            const cost = upgrade.baseCost * Math.pow(1.15, quantity);
+            const cost = upgrade.baseCost * Math.pow(1.17, quantity);
 
             if (prev.cookies < cost) return prev;
 
-            return {
+            let next: GameState = {
                 ...prev,
                 cookies: prev.cookies - cost,
                 upgrades: {
                     ...prev.upgrades,
                     [upgrade.id]: quantity + 1,
                 },
+                totalUpgradesPurchased: prev.totalUpgradesPurchased + 1,
             };
+
+            next = applyFrenzyBuffIfNeeded(upgrade, next);
+
+            return next;
         });
     };
 
@@ -844,6 +1307,7 @@ function App() {
             setLastCaseResult(null);
             setLastHighRoll(null);
             setOverlay(null);
+            setLastSyncedBestWin(0);
         }
     };
 
@@ -877,9 +1341,10 @@ function App() {
 
         setGame((prev) => {
             const maxBet = Math.floor(prev.cookies);
-            const normalizedBet = Math.max(
+            const normalizedBet = clamp(
+                Math.floor(wheelBet),
                 MIN_WHEEL_BET,
-                Math.min(Math.floor(wheelBet), maxBet),
+                maxBet,
             );
 
             if (normalizedBet <= 0 || maxBet <= 0) {
@@ -888,7 +1353,7 @@ function App() {
             }
 
             let cookies = prev.cookies - normalizedBet;
-            let buffs = prev.activeBuffs;
+            let buffs = pruneExpiredBuffs(prev.activeBuffs);
 
             cookies += normalizedBet * segment.cookiesMultiplier;
 
@@ -916,10 +1381,31 @@ function App() {
             let biggestWin = prev.gamblingStats.biggestWin;
             let leaderboard = prev.leaderboard;
 
+            const isWin = delta > 0;
+            const isJackpot = segment.id === 'jackpot';
+
+            let consecutiveLosses = isWin
+                ? 0
+                : prev.gamblingStats.consecutiveLosses + 1;
+            const maxConsecutiveLosses = Math.max(
+                prev.gamblingStats.maxConsecutiveLosses,
+                consecutiveLosses,
+            );
+
+            const jackpotStreak = isJackpot
+                ? prev.gamblingStats.jackpotStreak + 1
+                : 0;
+            const maxJackpotStreak = Math.max(
+                prev.gamblingStats.maxJackpotStreak,
+                jackpotStreak,
+            );
+
             if (delta > 0) {
                 biggestWin = Math.max(biggestWin, delta);
                 const entry: LeaderboardEntry = {
-                    id: `wheel-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+                    id: `wheel-${Date.now()}-${Math.random()
+                        .toString(36)
+                        .slice(2)}`,
                     playerName: prev.playerName || 'Invité',
                     amount: delta,
                     date: new Date().toISOString(),
@@ -934,7 +1420,7 @@ function App() {
                 label: segment.label,
                 delta,
                 spent: normalizedBet,
-                isJackpot: segment.id === 'jackpot',
+                isJackpot,
                 buffLabel,
             };
 
@@ -946,6 +1432,10 @@ function App() {
                     ...prev.gamblingStats,
                     spinsPlayed: prev.gamblingStats.spinsPlayed + 1,
                     biggestWin,
+                    consecutiveLosses,
+                    maxConsecutiveLosses,
+                    jackpotStreak,
+                    maxJackpotStreak,
                 },
                 leaderboard,
             };
@@ -985,14 +1475,15 @@ function App() {
                 if (roll < caseDef.jackpotChance) {
                     rewardMultiplier = caseDef.jackpotMultiplier;
                     isJackpot = true;
-                } else if (roll < caseDef.jackpotChance + 0.15) {
+                } else if (roll < caseDef.jackpotChance + 0.2) {
                     rewardMultiplier = caseDef.failMultiplier;
                     isLoss = true;
                 } else {
                     const r = Math.random();
                     rewardMultiplier =
                         caseDef.minMultiplier +
-                        r * (caseDef.maxMultiplier - caseDef.minMultiplier);
+                        r *
+                        (caseDef.maxMultiplier - caseDef.minMultiplier);
                 }
 
                 const reward = bet * rewardMultiplier;
@@ -1003,10 +1494,30 @@ function App() {
                 let biggestWin = prev.gamblingStats.biggestWin;
                 let leaderboard = prev.leaderboard;
 
+                const isWin = delta > 0;
+
+                let consecutiveLosses = isWin
+                    ? 0
+                    : prev.gamblingStats.consecutiveLosses + 1;
+                const maxConsecutiveLosses = Math.max(
+                    prev.gamblingStats.maxConsecutiveLosses,
+                    consecutiveLosses,
+                );
+
+                const jackpotStreak = isJackpot
+                    ? prev.gamblingStats.jackpotStreak + 1
+                    : 0;
+                const maxJackpotStreak = Math.max(
+                    prev.gamblingStats.maxJackpotStreak,
+                    jackpotStreak,
+                );
+
                 if (delta > 0) {
                     biggestWin = Math.max(biggestWin, delta);
                     const entry: LeaderboardEntry = {
-                        id: `case-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+                        id: `case-${Date.now()}-${Math.random()
+                            .toString(36)
+                            .slice(2)}`,
                         playerName: prev.playerName || 'Invité',
                         amount: delta,
                         date: new Date().toISOString(),
@@ -1033,6 +1544,10 @@ function App() {
                         ...prev.gamblingStats,
                         casesOpened: prev.gamblingStats.casesOpened + 1,
                         biggestWin,
+                        consecutiveLosses,
+                        maxConsecutiveLosses,
+                        jackpotStreak,
+                        maxJackpotStreak,
                     },
                     leaderboard,
                 };
@@ -1057,26 +1572,48 @@ function App() {
                 return prev;
             }
 
-            const bet = allIn
-                ? maxBet
-                : Math.max(1_000, Math.min(maxBet, Math.floor(prev.cookies * 0.25)));
+            const baseBet = Math.max(1_000, Math.floor(prev.cookies * 0.25));
+            const bet = allIn ? maxBet : clamp(baseBet, 1_000, maxBet);
 
             if (bet <= 0) {
                 highRollResult = null;
                 return prev;
             }
 
-            const win = Math.random() < 0.5;
+            // High roll légèrement perdant en moyenne
+            const winProb = allIn ? 0.44 : 0.47;
+            const win = Math.random() < winProb;
+
             const cookies = win ? prev.cookies + bet : prev.cookies - bet;
             const delta = cookies - prev.cookies;
 
             let biggestWin = prev.gamblingStats.biggestWin;
             let leaderboard = prev.leaderboard;
 
-            if (win && delta > 0) {
+            const isWin = win && delta > 0;
+
+            let consecutiveLosses = isWin
+                ? 0
+                : prev.gamblingStats.consecutiveLosses + 1;
+            const maxConsecutiveLosses = Math.max(
+                prev.gamblingStats.maxConsecutiveLosses,
+                consecutiveLosses,
+            );
+
+            let jackpotStreak = 0;
+            const maxJackpotStreak = prev.gamblingStats.maxJackpotStreak;
+
+            let allInLosses = prev.gamblingStats.allInLosses;
+            if (allIn && !win) {
+                allInLosses += 1;
+            }
+
+            if (isWin) {
                 biggestWin = Math.max(biggestWin, delta);
                 const entry: LeaderboardEntry = {
-                    id: `highroll-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+                    id: `highroll-${Date.now()}-${Math.random()
+                        .toString(36)
+                        .slice(2)}`,
                     playerName: prev.playerName || 'Invité',
                     amount: delta,
                     date: new Date().toISOString(),
@@ -1102,6 +1639,11 @@ function App() {
                     highRollPlays: prev.gamblingStats.highRollPlays + 1,
                     allInCount: prev.gamblingStats.allInCount + (allIn ? 1 : 0),
                     biggestWin,
+                    consecutiveLosses,
+                    maxConsecutiveLosses,
+                    jackpotStreak,
+                    maxJackpotStreak,
+                    allInLosses,
                 },
                 leaderboard,
             };
@@ -1117,20 +1659,25 @@ function App() {
         () => ACHIEVEMENTS.filter((ach) => ach.check(game, effectiveCps)),
         [game, effectiveCps],
     );
-    const unlockedAchievementIds = new Set(unlockedAchievements.map((a) => a.id));
+    const unlockedAchievementIds = new Set(
+        unlockedAchievements.map((a) => a.id),
+    );
 
     const closeOverlay = () => setOverlay(null);
 
     return (
         <div className={appClassName}>
+            {/* HEADER : logo + titre + joueur + actions */}
             <header className="app-header">
-                <div className="app-title">
-                    <span className="app-logo">🍪</span>
-                    <div>
-                        <h1>Imtmortels Cookie Casino</h1>
+                <div className="app-header-left">
+                    <div className="app-logo-circle">
+                        <span className="app-logo">🍪</span>
+                    </div>
+                    <div className="app-title">
+                        <h1>IMTMORTELS COOKIE CASINO</h1>
                         <p>
-                            Clique, upgrade, teste des mécaniques de casino… mais ici tout
-                            reste virtuel. Utilise-le comme démo, pas comme habitude.
+                            Clique, upgrade et tente ta chance au casino de
+                            cookies. Tout est virtuel, garde ça fun et sain. ✨
                         </p>
                     </div>
                 </div>
@@ -1158,7 +1705,9 @@ function App() {
                         className="ghost-button"
                         onClick={toggleTheme}
                     >
-                        {game.theme === 'dark' ? '☀️ Mode clair' : '🌙 Mode sombre'}
+                        {game.theme === 'dark'
+                            ? '☀️ Mode clair'
+                            : '🌙 Mode sombre'}
                     </button>
                     <button
                         type="button"
@@ -1170,681 +1719,957 @@ function App() {
                 </div>
             </header>
 
-            <main className="game-layout">
-                {/* Colonne gauche : cookie + succès */}
-                <section className="cookie-panel">
-                    <div className="cookie-card">
-                        <div className="cookie-aura" />
-                        <div className="cookie-wrapper">
-                            <button
-                                type="button"
-                                className={`cookie-button ${isCookiePressed ? 'cookie-button--pressed' : ''
-                                    }`}
-                                onClick={handleCookieClick}
-                            >
-                                <div className="cookie-ring">
-                                    <div className="cookie-ring-inner" />
-                                </div>
-                                <div className="cookie">
-                                    <div className="cookie-chip cookie-chip--1" />
-                                    <div className="cookie-chip cookie-chip--2" />
-                                    <div className="cookie-chip cookie-chip--3" />
-                                    <div className="cookie-chip cookie-chip--4" />
-                                    <div className="cookie-gloss" />
-                                </div>
-                            </button>
-                            <p className="cookie-helper">
-                                Clique pour générer des cookies, investis-les dans les
-                                améliorations puis explore les jeux du casino cookie. ✨
-                            </p>
-                        </div>
-
-                        <div className="stats-card">
-                            <div className="stat">
-                                <span className="stat-label">Cookies</span>
-                                <span className="stat-value">
-                                    {formatNumber(game.cookies, 1)}
-                                </span>
-                            </div>
-                            <div className="stat">
-                                <span className="stat-label">Total produit</span>
-                                <span className="stat-value">
-                                    {formatNumber(game.totalCookies, 1)}
-                                </span>
-                            </div>
-                            <div className="stat">
-                                <span className="stat-label">Par clic</span>
-                                <span className="stat-value">
-                                    +{formatNumber(cookiesPerClick, 1)}
-                                </span>
-                            </div>
-                            <div className="stat">
-                                <span className="stat-label">Par seconde</span>
-                                <span className="stat-value">
-                                    {formatNumber(effectiveCps, 1)} /s
-                                </span>
-                                <span className="stat-sub">
-                                    Base : {formatNumber(baseCps, 1)} /s
-                                </span>
-                            </div>
-                        </div>
-
-                        {game.activeBuffs.length > 0 && (
-                            <div className="buffs-bar">
-                                {game.activeBuffs.map((buff) => {
-                                    const remaining = Math.max(
-                                        0,
-                                        Math.round((buff.expiresAt - Date.now()) / 1000),
-                                    );
-
-                                    return (
-                                        <div key={buff.id} className="buff-pill">
-                                            <span>{buff.label}</span>
-                                            <span className="buff-pill-timer">⏱ {remaining}s</span>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        )}
-                    </div>
-
-                    <section className="achievements-card">
-                        <h2 className="section-title">Succès</h2>
-                        <div className="achievements-list">
-                            {ACHIEVEMENTS.map((ach) => {
-                                const unlocked = unlockedAchievementIds.has(ach.id);
-                                return (
-                                    <div
-                                        key={ach.id}
-                                        className={`achievement ${unlocked ? 'achievement--unlocked' : 'achievement--locked'
-                                            }`}
-                                    >
-                                        <span className="achievement-dot" />
-                                        <div className="achievement-text">
-                                            <span className="achievement-label">{ach.label}</span>
-                                            <span className="achievement-description">
-                                                {ach.description}
-                                            </span>
-                                        </div>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    </section>
-                </section>
-
-                {/* Colonne droite : shop + casino + leaderboard */}
-                <section className="right-column">
-                    <section className="shop-panel">
-                        <h2 className="section-title">Améliorations</h2>
-                        <p className="section-subtitle">
-                            Investis tes cookies pour booster ta production ou débloquer des
-                            effets visuels. Le prix augmente à chaque achat.
-                        </p>
-
-                        <div className="shop-list">
-                            {UPGRADE_DEFINITIONS.filter(
-                                (upgrade) => game.totalCookies >= upgrade.unlockAt,
-                            ).map((upgrade) => {
-                                const quantity = game.upgrades[upgrade.id] ?? 0;
-                                const cost = upgrade.baseCost * Math.pow(1.15, quantity);
-                                const affordable = game.cookies >= cost;
-
-                                return (
+            <main className="app-main">
+                {/* ZONE HAUTE : cookie à gauche, carte info à droite */}
+                <section className="top-layout">
+                    {/* Colonne gauche : cookie cliquable + stats de base */}
+                    <section className="top-layout-left">
+                        <div className="cookie-panel">
+                            <div className="cookie-card">
+                                <div className="cookie-aura" />
+                                <div className="cookie-main">
                                     <button
                                         type="button"
-                                        key={upgrade.id}
-                                        className={`shop-item ${affordable ? 'shop-item--affordable' : ''
+                                        className={`cookie-button ${isCookiePressed
+                                                ? 'cookie-button--pressed'
+                                                : ''
                                             }`}
-                                        onClick={() => handleBuyUpgrade(upgrade)}
-                                        disabled={!affordable}
+                                        onClick={handleCookieClick}
                                     >
-                                        <div className="shop-item-main">
-                                            <span className="shop-item-emoji">{upgrade.emoji}</span>
-                                            <div className="shop-item-text">
-                                                <span className="shop-item-name">{upgrade.name}</span>
-                                                <span className="shop-item-description">
-                                                    {upgrade.description}
-                                                </span>
-                                                <div className="shop-item-effects">
-                                                    {upgrade.cps > 0 && (
-                                                        <span>+{upgrade.cps} /s</span>
-                                                    )}
-                                                    {upgrade.clickBonus > 0 && (
-                                                        <span>+{upgrade.clickBonus} par clic</span>
-                                                    )}
-                                                    {upgrade.cps === 0 &&
-                                                        upgrade.clickBonus === 0 && (
-                                                            <span>Cosmétique uniquement ✨</span>
-                                                        )}
+                                        <div className="cookie-ring">
+                                            <div className="cookie-ring-inner">
+                                                <div className="cookie">
+                                                    <div className="cookie-chip cookie-chip--1" />
+                                                    <div className="cookie-chip cookie-chip--2" />
+                                                    <div className="cookie-chip cookie-chip--3" />
+                                                    <div className="cookie-chip cookie-chip--4" />
+                                                    <div className="cookie-gloss" />
                                                 </div>
                                             </div>
                                         </div>
-                                        <div className="shop-item-meta">
-                                            <span className="shop-item-cost">
-                                                {formatNumber(cost, 1)} cookies
-                                            </span>
-                                            <span className="shop-item-qty">x{quantity}</span>
-                                        </div>
                                     </button>
-                                );
-                            })}
 
-                            {UPGRADE_DEFINITIONS.every(
-                                (upgrade) => game.totalCookies < upgrade.unlockAt,
-                            ) && (
-                                    <p className="shop-empty">
-                                        Clique encore un peu pour débloquer ta première amélioration.{' '}
-                                        💡
-                                    </p>
-                                )}
+                                    <div className="cookie-stats">
+                                        <p className="cookie-main-count">
+                                            {formatNumber(game.cookies, 1)}{' '}
+                                            cookies
+                                        </p>
+                                        <p className="cookie-sub">
+                                            {formatNumber(
+                                                cookiesPerClick,
+                                                2,
+                                            )}{' '}
+                                            par clic ·{' '}
+                                            {formatNumber(
+                                                effectiveCps,
+                                                2,
+                                            )}{' '}
+                                            / sec
+                                        </p>
+                                        <p className="cookie-sub cookie-sub--secondary">
+                                            Total généré :{' '}
+                                            {formatNumber(
+                                                game.totalCookies,
+                                                1,
+                                            )}{' '}
+                                            cookies
+                                        </p>
+                                    </div>
+
+                                    {game.activeBuffs.length > 0 && (
+                                        <div className="buffs-bar">
+                                            {game.activeBuffs.map((buff) => (
+                                                <span
+                                                    key={buff.id}
+                                                    className="buff-pill"
+                                                >
+                                                    <span className="buff-pill-emoji">
+                                                        ⚡
+                                                    </span>
+                                                    <span className="buff-pill-label">
+                                                        {buff.label}
+                                                    </span>
+                                                </span>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
                         </div>
                     </section>
 
-                    <section className="casino-section">
-                        <h2 className="section-title">Casino cookie</h2>
-                        <p className="section-subtitle">
-                            Tous les jeux utilisent des cookies virtuels. Aucune mise réelle
-                            ici, c’est un bac à sable pour comprendre les mécaniques.
-                        </p>
-
-                        <div className="casino-grid">
-                            {/* ROUE DE LA CHANCE */}
-                            <div className="casino-card">
-                                <div className="casino-card-header">
-                                    <span className="casino-card-emoji">🎰</span>
-                                    <div>
-                                        <h3 className="casino-card-title">Roue de la chance</h3>
-                                        <p className="casino-card-subtitle">
-                                            Choisis ta mise, lance la roue et tente des jackpots ou
-                                            des boosts temporaires.
+                    {/* Colonne droite : carte d'info (Top3 + onglets) */}
+                    <section className="top-layout-right">
+                        <section
+                            className={`info-panel ${activeInfoTab === 'leaderboard'
+                                    ? 'info-panel--leaderboard'
+                                    : ''
+                                }`}
+                        >
+                            {/* Bandeau Top 3 (visible sauf en mode classement fusionné) */}
+                            {activeInfoTab !== 'leaderboard' && (
+                                <div className="info-top3">
+                                    <div className="info-top3-heading">
+                                        <h2 className="info-top3-title">
+                                            Top 3 joueurs
+                                        </h2>
+                                        <p className="info-top3-subtitle">
+                                            Basé sur les meilleurs gains en un
+                                            seul coup de casino.
                                         </p>
                                     </div>
+                                    <ol className="top3-list">
+                                        {globalTop3.length === 0 ? (
+                                            <li className="top3-empty">
+                                                Aucun joueur global encore dans
+                                                le classement. Fonce 🎰
+                                            </li>
+                                        ) : (
+                                            globalTop3.map(
+                                                (entry, index) => (
+                                                    <li
+                                                        key={entry.id}
+                                                        className={`top3-item top3-item--${index + 1
+                                                            }`}
+                                                    >
+                                                        <span className="top3-rank">
+                                                            {index === 0
+                                                                ? '👑'
+                                                                : index === 1
+                                                                    ? '🥈'
+                                                                    : '🥉'}
+                                                        </span>
+                                                        <div className="top3-text">
+                                                            <span className="top3-name">
+                                                                {entry.name}
+                                                            </span>
+                                                            <span className="top3-score">
+                                                                {formatNumber(
+                                                                    entry.score,
+                                                                    1,
+                                                                )}{' '}
+                                                                cookies
+                                                            </span>
+                                                        </div>
+                                                    </li>
+                                                ),
+                                            )
+                                        )}
+                                    </ol>
                                 </div>
+                            )}
 
-                                <div className="wheel-layout">
-                                    <div className="wheel-wrapper">
-                                        <div
-                                            className={`wheel ${isWheelSpinning ? 'wheel--spinning' : ''
-                                                }`}
-                                        >
-                                            <div className="wheel-inner" />
-                                        </div>
-                                        <div className="wheel-pointer" />
-                                    </div>
-                                    <div className="wheel-actions">
-                                        <div className="wheel-bet-row">
-                                            <label className="wheel-bet-label">
-                                                Mise :
-                                                <input
-                                                    type="number"
-                                                    className="wheel-bet-input"
-                                                    min={MIN_WHEEL_BET}
-                                                    max={currentWheelMaxBet}
-                                                    value={
-                                                        currentWheelMaxBet === 0
-                                                            ? ''
-                                                            : Math.min(
-                                                                wheelBet || 0,
-                                                                currentWheelMaxBet,
-                                                            )
-                                                    }
-                                                    onChange={(e) =>
-                                                        setWheelBet(
-                                                            Number.isNaN(Number(e.target.value))
-                                                                ? MIN_WHEEL_BET
-                                                                : Number(e.target.value),
-                                                        )
-                                                    }
-                                                    placeholder={MIN_WHEEL_BET.toString()}
-                                                />
-                                                <span className="wheel-bet-unit">cookies</span>
-                                            </label>
-                                            <div className="wheel-bet-buttons">
-                                                <button
-                                                    type="button"
-                                                    className="mini-chip"
-                                                    onClick={() =>
-                                                        setWheelBet(
-                                                            Math.min(
-                                                                Math.max(MIN_WHEEL_BET, 500),
-                                                                currentWheelMaxBet,
-                                                            ),
-                                                        )
-                                                    }
-                                                >
-                                                    500
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    className="mini-chip"
-                                                    onClick={() =>
-                                                        setWheelBet(
-                                                            Math.min(
-                                                                Math.max(MIN_WHEEL_BET, 5_000),
-                                                                currentWheelMaxBet,
-                                                            ),
-                                                        )
-                                                    }
-                                                >
-                                                    5k
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    className="mini-chip"
-                                                    onClick={() =>
-                                                        setWheelBet(
-                                                            Math.min(
-                                                                Math.max(MIN_WHEEL_BET, 50_000),
-                                                                currentWheelMaxBet,
-                                                            ),
-                                                        )
-                                                    }
-                                                >
-                                                    50k
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    className="mini-chip mini-chip--danger"
-                                                    disabled={currentWheelMaxBet < MIN_WHEEL_BET}
-                                                    onClick={() =>
-                                                        setWheelBet(
-                                                            Math.max(MIN_WHEEL_BET, currentWheelMaxBet),
-                                                        )
-                                                    }
-                                                >
-                                                    All-in
-                                                </button>
-                                            </div>
-                                        </div>
-
-                                        <button
-                                            type="button"
-                                            className="primary-button"
-                                            onClick={handleWheelSpin}
-                                            disabled={
-                                                isWheelSpinning ||
-                                                currentWheelMaxBet < MIN_WHEEL_BET
-                                            }
-                                        >
-                                            {isWheelSpinning ? '...' : 'Lancer la roue'}
-                                        </button>
-                                        <p className="wheel-price">
-                                            Mise min : {MIN_WHEEL_BET} cookies · Solde max :{' '}
-                                            {formatNumber(currentWheelMaxBet, 0)}
-                                        </p>
-                                        <ul className="wheel-odds">
-                                            <li>Perte totale de la mise possible</li>
-                                            <li>Remboursé ou petit bénéfice</li>
-                                            <li>Jackpot rare mais massif</li>
-                                            <li>Boosts temporaires (CPS / clic)</li>
-                                        </ul>
-                                    </div>
-                                </div>
-
-                                {lastWheelResult && (
-                                    <p
-                                        className={`casino-result ${lastWheelResult.delta >= 0
-                                                ? 'casino-result--positive'
-                                                : 'casino-result--negative'
-                                            }`}
-                                    >
-                                        Résultat : {lastWheelResult.label} · Mise :{' '}
-                                        {formatNumber(lastWheelResult.spent, 1)} ·{' '}
-                                        {lastWheelResult.delta >= 0 ? '+' : ''}
-                                        {formatNumber(lastWheelResult.delta, 1)} cookies
-                                        {lastWheelResult.buffLabel
-                                            ? ` · Buff : ${lastWheelResult.buffLabel}`
-                                            : ''}
-                                    </p>
-                                )}
+                            {/* Menu d'onglets */}
+                            <div className="info-tabs">
+                                <button
+                                    type="button"
+                                    className={`info-tab ${activeInfoTab === 'upgrades'
+                                            ? 'info-tab--active'
+                                            : ''
+                                        }`}
+                                    onClick={() =>
+                                        setActiveInfoTab('upgrades')
+                                    }
+                                >
+                                    Améliorations
+                                </button>
+                                <button
+                                    type="button"
+                                    className={`info-tab ${activeInfoTab === 'achievements'
+                                            ? 'info-tab--active'
+                                            : ''
+                                        }`}
+                                    onClick={() =>
+                                        setActiveInfoTab('achievements')
+                                    }
+                                >
+                                    Succès
+                                </button>
+                                <button
+                                    type="button"
+                                    className={`info-tab ${activeInfoTab === 'leaderboard'
+                                            ? 'info-tab--active'
+                                            : ''
+                                        }`}
+                                    onClick={() =>
+                                        setActiveInfoTab('leaderboard')
+                                    }
+                                >
+                                    Classement général
+                                </button>
                             </div>
 
-                            {/* CASES / LOOTBOXES */}
-                            <div className="casino-card">
-                                <div className="casino-card-header">
-                                    <span className="casino-card-emoji">🎁</span>
-                                    <div>
-                                        <h3 className="casino-card-title">Openings de caisses</h3>
-                                        <p className="casino-card-subtitle">
-                                            Choisis une caisse, paye son prix et découvre ton loot :
-                                            petites pertes, bons multiplicateurs ou jackpot.
+                            {/* Contenu des onglets */}
+                            <div
+                                className={`info-content ${activeInfoTab === 'leaderboard'
+                                        ? 'info-content--leaderboard'
+                                        : ''
+                                    }`}
+                            >
+                                {/* Onglet AMÉLIORATIONS */}
+                                {activeInfoTab === 'upgrades' && (
+                                    <div className="info-upgrades">
+                                        <p className="info-section-intro">
+                                            Investis tes cookies dans des boosts
+                                            permanents. Les bâtiments produisent
+                                            en continu, les clics deviennent
+                                            monstrueux.
                                         </p>
-                                    </div>
-                                </div>
 
-                                <div className="case-list">
-                                    {CASE_DEFINITIONS.map((caseDef) => {
-                                        const affordable = game.cookies >= caseDef.cost;
-                                        const isOpening = openingCaseId === caseDef.id;
-
-                                        return (
-                                            <button
-                                                key={caseDef.id}
-                                                type="button"
-                                                className={`case-card ${affordable ? 'case-card--affordable' : ''
-                                                    } ${isOpening ? 'case-card--opening' : ''}`}
-                                                onClick={() => handleOpenCase(caseDef)}
-                                                disabled={!affordable || isOpening}
-                                            >
-                                                <div className="case-main">
-                                                    <span className="case-emoji">{caseDef.emoji}</span>
-                                                    <div className="case-text">
-                                                        <span className="case-name">{caseDef.name}</span>
-                                                        <span className="case-description">
-                                                            {caseDef.description}
+                                        <div className="upgrade-tabs">
+                                            {UPGRADE_CATEGORIES.map(
+                                                (category) => (
+                                                    <button
+                                                        key={category.id}
+                                                        type="button"
+                                                        className={`upgrade-tab${selectedUpgradeCategory ===
+                                                                category.id
+                                                                ? ' upgrade-tab--active'
+                                                                : ''
+                                                            }`}
+                                                        onClick={() =>
+                                                            setSelectedUpgradeCategory(
+                                                                category.id,
+                                                            )
+                                                        }
+                                                    >
+                                                        <span className="upgrade-tab-label">
+                                                            {category.label}
                                                         </span>
-                                                        <div className="case-odds">
-                                                            <span>
-                                                                Jackpot :{' '}
-                                                                {Math.round(
-                                                                    caseDef.jackpotChance * 100,
-                                                                )}
-                                                                %
+                                                        <span className="upgrade-tab-description">
+                                                            {
+                                                                category.description
+                                                            }
+                                                        </span>
+                                                    </button>
+                                                ),
+                                            )}
+                                        </div>
+
+                                        <div className="shop-list-wrapper">
+                                            {UPGRADE_DEFINITIONS_BY_CATEGORY[
+                                                selectedUpgradeCategory
+                                            ].some(
+                                                (upgrade) =>
+                                                    game.totalCookies >=
+                                                    upgrade.unlockAt,
+                                            ) ? (
+                                                <div className="shop-list">
+                                                    {UPGRADE_DEFINITIONS_BY_CATEGORY[
+                                                        selectedUpgradeCategory
+                                                    ]
+                                                        .filter(
+                                                            (upgrade) =>
+                                                                game.totalCookies >=
+                                                                upgrade.unlockAt,
+                                                        )
+                                                        .map((upgrade) => {
+                                                            const quantity =
+                                                                game.upgrades[
+                                                                upgrade.id
+                                                                ] ?? 0;
+                                                            const cost =
+                                                                upgrade.baseCost *
+                                                                Math.pow(
+                                                                    1.15,
+                                                                    quantity,
+                                                                );
+                                                            const affordable =
+                                                                game.cookies >=
+                                                                cost;
+
+                                                            return (
+                                                                <button
+                                                                    key={
+                                                                        upgrade.id
+                                                                    }
+                                                                    type="button"
+                                                                    className={`shop-item${affordable
+                                                                            ? ' shop-item--affordable'
+                                                                            : ''
+                                                                        }`}
+                                                                    onClick={() =>
+                                                                        handleBuyUpgrade(
+                                                                            upgrade,
+                                                                        )
+                                                                    }
+                                                                    disabled={
+                                                                        !affordable
+                                                                    }
+                                                                >
+                                                                    <div className="shop-item-main">
+                                                                        <div className="shop-item-icon">
+                                                                            {
+                                                                                upgrade.emoji
+                                                                            }
+                                                                        </div>
+                                                                        <div className="shop-item-text">
+                                                                            <span className="shop-item-name">
+                                                                                {
+                                                                                    upgrade.name
+                                                                                }
+                                                                            </span>
+                                                                            <span className="shop-item-description">
+                                                                                {
+                                                                                    upgrade.description
+                                                                                }
+                                                                            </span>
+                                                                            <div className="shop-item-effects">
+                                                                                {upgrade.cps >
+                                                                                    0 && (
+                                                                                        <span>
+                                                                                            +
+                                                                                            {
+                                                                                                upgrade.cps
+                                                                                            }{' '}
+                                                                                            /s
+                                                                                        </span>
+                                                                                    )}
+                                                                                {upgrade.clickBonus >
+                                                                                    0 && (
+                                                                                        <span>
+                                                                                            +
+                                                                                            {
+                                                                                                upgrade.clickBonus
+                                                                                            }{' '}
+                                                                                            par
+                                                                                            clic
+                                                                                        </span>
+                                                                                    )}
+                                                                                {upgrade.cps ===
+                                                                                    0 &&
+                                                                                    upgrade.clickBonus ===
+                                                                                    0 && (
+                                                                                        <span>
+                                                                                            Cosmétique
+                                                                                            uniquement
+                                                                                            ✨
+                                                                                        </span>
+                                                                                    )}
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div className="shop-item-meta">
+                                                                        <span className="shop-item-cost">
+                                                                            {formatNumber(
+                                                                                cost,
+                                                                                1,
+                                                                            )}{' '}
+                                                                            cookies
+                                                                        </span>
+                                                                        <span className="shop-item-qty">
+                                                                            x
+                                                                            {
+                                                                                quantity
+                                                                            }
+                                                                        </span>
+                                                                    </div>
+                                                                </button>
+                                                            );
+                                                        })}
+                                                </div>
+                                            ) : (
+                                                <p className="shop-empty">
+                                                    Clique encore un peu pour
+                                                    débloquer des améliorations
+                                                    dans cette catégorie. 💡
+                                                </p>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Onglet SUCCÈS */}
+                                {activeInfoTab === 'achievements' && (
+                                    <div className="info-achievements">
+                                        <div className="info-achievements-header">
+                                            <h3>Succès</h3>
+                                            <p className="achievements-count">
+                                                {unlockedAchievements.length} /{' '}
+                                                {ACHIEVEMENTS.length} débloqués
+                                            </p>
+                                        </div>
+                                        <p className="info-section-intro">
+                                            Débloque des succès en cliquant,
+                                            investissant et en testant le
+                                            casino. Rien n’est monétisé, c’est
+                                            juste pour le fun et le challenge.
+                                        </p>
+
+                                        <div className="achievements-list">
+                                            {ACHIEVEMENTS.map((ach) => {
+                                                const unlocked =
+                                                    unlockedAchievementIds.has(
+                                                        ach.id,
+                                                    );
+                                                return (
+                                                    <div
+                                                        key={ach.id}
+                                                        className={`achievement ${unlocked
+                                                                ? 'achievement--unlocked'
+                                                                : 'achievement--locked'
+                                                            }`}
+                                                    >
+                                                        <span className="achievement-dot" />
+                                                        <div className="achievement-text">
+                                                            <span className="achievement-label">
+                                                                {ach.label}
                                                             </span>
-                                                            <span>
-                                                                Payout moyen ≈{' '}
-                                                                {Math.round(
-                                                                    ((caseDef.minMultiplier +
-                                                                        caseDef.maxMultiplier) /
-                                                                        2) *
-                                                                    100,
-                                                                )}
-                                                                %
+                                                            <span className="achievement-description">
+                                                                {
+                                                                    ach.description
+                                                                }
                                                             </span>
                                                         </div>
                                                     </div>
-                                                </div>
-                                                <div className="case-meta">
-                                                    <span className="case-cost">
-                                                        {formatNumber(caseDef.cost, 0)} cookies
-                                                    </span>
-                                                </div>
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-
-                                {lastCaseResult && (
-                                    <p
-                                        className={`casino-result ${lastCaseResult.reward - lastCaseResult.spent >= 0
-                                                ? 'casino-result--positive'
-                                                : 'casino-result--negative'
-                                            }`}
-                                    >
-                                        Dernière caisse : {lastCaseResult.caseName} · Gain :{' '}
-                                        {formatNumber(lastCaseResult.reward, 1)} cookies (
-                                        {lastCaseResult.reward - lastCaseResult.spent >= 0
-                                            ? '+'
-                                            : ''}
-                                        {formatNumber(
-                                            lastCaseResult.reward - lastCaseResult.spent,
-                                            1,
-                                        )}{' '}
-                                        net){' '}
-                                        {lastCaseResult.isJackpot
-                                            ? '🎉 JACKPOT !'
-                                            : lastCaseResult.isLoss
-                                                ? '😬 Pas ouf...'
-                                                : ''}
-                                    </p>
-                                )}
-                            </div>
-
-                            {/* COUP DE POKER / ALL-IN */}
-                            <div className="casino-card">
-                                <div className="casino-card-header">
-                                    <span className="casino-card-emoji">🃏</span>
-                                    <div>
-                                        <h3 className="casino-card-title">Coup de poker</h3>
-                                        <p className="casino-card-subtitle">
-                                            50% de chances de doubler, 50% de tout perdre. Mode
-                                            normal ou all-in, toujours en cookies virtuels.
-                                        </p>
+                                                );
+                                            })}
+                                        </div>
                                     </div>
-                                </div>
-
-                                <div className="highroll-layout">
-                                    <div className="highroll-actions">
-                                        <button
-                                            type="button"
-                                            className="secondary-button"
-                                            onClick={() => handleHighRoll(false)}
-                                            disabled={game.cookies < 1_000}
-                                        >
-                                            Coup de poker (mise élevée)
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className="secondary-button secondary-button--danger"
-                                            onClick={() => handleHighRoll(true)}
-                                            disabled={game.cookies <= 0}
-                                        >
-                                            All-in 50 / 50
-                                        </button>
-                                        <p className="highroll-note">
-                                            Mise standard ≈ 25% de ton solde (min 1 000 cookies).
-                                            All-in : tu mises absolument tout.
-                                        </p>
-                                    </div>
-                                </div>
-
-                                {lastHighRoll && (
-                                    <p
-                                        className={`casino-result ${lastHighRoll.delta >= 0
-                                                ? 'casino-result--positive'
-                                                : 'casino-result--negative'
-                                            }`}
-                                    >
-                                        Coup de poker{' '}
-                                        {lastHighRoll.allIn ? 'ALL-IN' : 'standard'} · Mise :{' '}
-                                        {formatNumber(lastHighRoll.bet, 1)} · Résultat :{' '}
-                                        {lastHighRoll.outcome === 'win' ? 'Victoire 🎉' : 'Perdu 😬'}{' '}
-                                        ({lastHighRoll.delta >= 0 ? '+' : ''}
-                                        {formatNumber(lastHighRoll.delta, 1)} cookies)
-                                    </p>
                                 )}
-                            </div>
-                        </div>
 
-                        <div className="casino-stats">
-                            <div className="casino-stat">
-                                <span className="casino-stat-label">Spins joués</span>
-                                <span className="casino-stat-value">
-                                    {game.gamblingStats.spinsPlayed}
-                                </span>
-                            </div>
-                            <div className="casino-stat">
-                                <span className="casino-stat-label">Caisses ouvertes</span>
-                                <span className="casino-stat-value">
-                                    {game.gamblingStats.casesOpened}
-                                </span>
-                            </div>
-                            <div className="casino-stat">
-                                <span className="casino-stat-label">Coups de poker</span>
-                                <span className="casino-stat-value">
-                                    {game.gamblingStats.highRollPlays}
-                                </span>
-                            </div>
-                            <div className="casino-stat">
-                                <span className="casino-stat-label">All-in tentés</span>
-                                <span className="casino-stat-value">
-                                    {game.gamblingStats.allInCount}
-                                </span>
-                            </div>
-                            <div className="casino-stat">
-                                <span className="casino-stat-label">Plus gros gain</span>
-                                <span className="casino-stat-value">
-                                    {formatNumber(game.gamblingStats.biggestWin, 1)} cookies
-                                </span>
-                            </div>
-                        </div>
+                                {/* Onglet CLASSEMENT GÉNÉRAL (fusion Top3 + classement) */}
+                                {activeInfoTab === 'leaderboard' && (
+                                    <div className="info-leaderboard">
+                                        <div className="leaderboard-top3-block">
+                                            <h3 className="leaderboard-title">
+                                                Classement global du casino
+                                            </h3>
+                                            <p className="leaderboard-subtitle">
+                                                Basé sur le meilleur gain en un
+                                                seul coup (roue, lootbox ou
+                                                high roll).
+                                            </p>
 
-                        <section className="leaderboard-section">
-                            <div className="leaderboard-card">
-                                <h3 className="leaderboard-title">Top gains du jour</h3>
-                                {todayTopWins.length === 0 ? (
-                                    <p className="leaderboard-empty">
-                                        Aucun gros gain enregistré aujourd&apos;hui. À toi de
-                                        briller ✨
-                                    </p>
-                                ) : (
-                                    <ul className="leaderboard-list">
-                                        {todayTopWins.map((entry, index) => (
-                                            <li key={entry.id} className="leaderboard-row">
-                                                <span className="leaderboard-rank">
-                                                    {index === 0
-                                                        ? '🥇'
-                                                        : index === 1
-                                                            ? '🥈'
-                                                            : index === 2
-                                                                ? '🥉'
-                                                                : `#${index + 1}`}
-                                                </span>
-                                                <span className="leaderboard-name">
-                                                    {entry.playerName}
-                                                </span>
-                                                <span className="leaderboard-amount">
-                                                    {formatNumber(entry.amount, 1)}
-                                                </span>
-                                                <span className="leaderboard-source">
-                                                    {entry.source === 'wheel'
-                                                        ? 'Roue'
-                                                        : entry.source === 'case'
-                                                            ? 'Caisse'
-                                                            : 'Coup de poker'}
-                                                </span>
-                                            </li>
-                                        ))}
-                                    </ul>
-                                )}
-                            </div>
-
-                            <div className="leaderboard-card">
-                                <h3 className="leaderboard-title">Records absolus (local)</h3>
-                                {allTimeTopWins.length === 0 ? (
-                                    <p className="leaderboard-empty">
-                                        Pas encore de record enregistré sur ce navigateur.
-                                    </p>
-                                ) : (
-                                    <>
-                                        <div className="leaderboard-podium">
-                                            <div className="podium-column podium-column--silver">
-                                                {allTimeTopWins[1] && (
-                                                    <>
-                                                        <div className="podium-medal">🥈</div>
-                                                        <div className="podium-name">
-                                                            {allTimeTopWins[1].playerName}
-                                                        </div>
-                                                        <div className="podium-amount">
-                                                            {formatNumber(allTimeTopWins[1].amount, 1)}
-                                                        </div>
-                                                    </>
-                                                )}
-                                            </div>
-                                            <div className="podium-column podium-column--gold">
-                                                {allTimeTopWins[0] && (
-                                                    <>
-                                                        <div className="podium-medal">🥇</div>
-                                                        <div className="podium-name">
-                                                            {allTimeTopWins[0].playerName}
-                                                        </div>
-                                                        <div className="podium-amount">
-                                                            {formatNumber(allTimeTopWins[0].amount, 1)}
-                                                        </div>
-                                                    </>
-                                                )}
-                                            </div>
-                                            <div className="podium-column podium-column--bronze">
-                                                {allTimeTopWins[2] && (
-                                                    <>
-                                                        <div className="podium-medal">🥉</div>
-                                                        <div className="podium-name">
-                                                            {allTimeTopWins[2].playerName}
-                                                        </div>
-                                                        <div className="podium-amount">
-                                                            {formatNumber(allTimeTopWins[2].amount, 1)}
-                                                        </div>
-                                                    </>
-                                                )}
+                                            <div className="leaderboard-podium">
+                                                <div className="podium-column podium-column--silver">
+                                                    {globalTop3[1] && (
+                                                        <>
+                                                            <span className="podium-rank">
+                                                                🥈
+                                                            </span>
+                                                            <span className="podium-name">
+                                                                {
+                                                                    globalTop3[1]
+                                                                        .name
+                                                                }
+                                                            </span>
+                                                            <span className="podium-score">
+                                                                {formatNumber(
+                                                                    globalTop3[1]
+                                                                        .score,
+                                                                    1,
+                                                                )}
+                                                            </span>
+                                                        </>
+                                                    )}
+                                                </div>
+                                                <div className="podium-column podium-column--gold">
+                                                    {globalTop3[0] && (
+                                                        <>
+                                                            <span className="podium-rank">
+                                                                🥇
+                                                            </span>
+                                                            <span className="podium-name">
+                                                                {
+                                                                    globalTop3[0]
+                                                                        .name
+                                                                }
+                                                            </span>
+                                                            <span className="podium-score">
+                                                                {formatNumber(
+                                                                    globalTop3[0]
+                                                                        .score,
+                                                                    1,
+                                                                )}
+                                                            </span>
+                                                        </>
+                                                    )}
+                                                </div>
+                                                <div className="podium-column podium-column--bronze">
+                                                    {globalTop3[2] && (
+                                                        <>
+                                                            <span className="podium-rank">
+                                                                🥉
+                                                            </span>
+                                                            <span className="podium-name">
+                                                                {
+                                                                    globalTop3[2]
+                                                                        .name
+                                                                }
+                                                            </span>
+                                                            <span className="podium-score">
+                                                                {formatNumber(
+                                                                    globalTop3[2]
+                                                                        .score,
+                                                                    1,
+                                                                )}
+                                                            </span>
+                                                        </>
+                                                    )}
+                                                </div>
                                             </div>
                                         </div>
 
-                                        <ul className="leaderboard-list">
-                                            {allTimeTopWins.map((entry, index) => (
-                                                <li key={entry.id} className="leaderboard-row">
-                                                    <span className="leaderboard-rank">
-                                                        {index === 0
-                                                            ? '🥇'
-                                                            : index === 1
-                                                                ? '🥈'
-                                                                : index === 2
-                                                                    ? '🥉'
-                                                                    : `#${index + 1}`}
-                                                    </span>
-                                                    <span className="leaderboard-name">
-                                                        {entry.playerName}
-                                                    </span>
-                                                    <span className="leaderboard-amount">
-                                                        {formatNumber(entry.amount, 1)}
-                                                    </span>
-                                                    <span className="leaderboard-source">
-                                                        {entry.source === 'wheel'
-                                                            ? 'Roue'
-                                                            : entry.source === 'case'
-                                                                ? 'Caisse'
-                                                                : 'Coup de poker'}
-                                                    </span>
-                                                </li>
-                                            ))}
-                                        </ul>
-                                    </>
+                                        <div className="leaderboard-scroll">
+                                            <div className="leaderboard-block">
+                                                <h4 className="leaderboard-block-title">
+                                                    Suite du classement global
+                                                </h4>
+                                                {globalRest.length === 0 ? (
+                                                    <p className="leaderboard-empty">
+                                                        Personne d&apos;autre
+                                                        n&apos;a encore percé
+                                                        le classement global.
+                                                    </p>
+                                                ) : (
+                                                    <ul className="leaderboard-list">
+                                                        {globalRest.map(
+                                                            (
+                                                                entry,
+                                                                index,
+                                                            ) => (
+                                                                <li
+                                                                    key={
+                                                                        entry.id
+                                                                    }
+                                                                    className="leaderboard-row"
+                                                                >
+                                                                    <span className="leaderboard-rank">
+                                                                        #
+                                                                        {index +
+                                                                            4}
+                                                                    </span>
+                                                                    <span className="leaderboard-name">
+                                                                        {
+                                                                            entry.name
+                                                                        }
+                                                                    </span>
+                                                                    <span className="leaderboard-amount">
+                                                                        {formatNumber(
+                                                                            entry.score,
+                                                                            1,
+                                                                        )}
+                                                                    </span>
+                                                                </li>
+                                                            ),
+                                                        )}
+                                                    </ul>
+                                                )}
+                                            </div>
+
+                                            <div className="leaderboard-block">
+                                                <h4 className="leaderboard-block-title">
+                                                    Top gains du jour (local)
+                                                </h4>
+                                                {todayTopWins.length === 0 ? (
+                                                    <p className="leaderboard-empty">
+                                                        Aucun gros gain local
+                                                        aujourd&apos;hui. À toi
+                                                        de jouer ✨
+                                                    </p>
+                                                ) : (
+                                                    <ul className="leaderboard-list">
+                                                        {todayTopWins.map(
+                                                            (
+                                                                entry,
+                                                                index,
+                                                            ) => (
+                                                                <li
+                                                                    key={
+                                                                        entry.id
+                                                                    }
+                                                                    className="leaderboard-row"
+                                                                >
+                                                                    <span className="leaderboard-rank">
+                                                                        #
+                                                                        {index +
+                                                                            1}
+                                                                    </span>
+                                                                    <span className="leaderboard-name">
+                                                                        {
+                                                                            entry.playerName
+                                                                        }
+                                                                    </span>
+                                                                    <span className="leaderboard-amount">
+                                                                        {formatNumber(
+                                                                            entry.amount,
+                                                                            1,
+                                                                        )}
+                                                                    </span>
+                                                                    <span className="leaderboard-source">
+                                                                        {entry.source ===
+                                                                            'wheel'
+                                                                            ? 'Roue'
+                                                                            : entry.source ===
+                                                                                'case'
+                                                                                ? 'Caisse'
+                                                                                : 'High roll'}
+                                                                    </span>
+                                                                </li>
+                                                            ),
+                                                        )}
+                                                    </ul>
+                                                )}
+                                            </div>
+
+                                            <div className="leaderboard-block">
+                                                <h4 className="leaderboard-block-title">
+                                                    Records absolus (local)
+                                                </h4>
+                                                {allTimeTopWins.length ===
+                                                    0 ? (
+                                                    <p className="leaderboard-empty">
+                                                        Pas encore de record
+                                                        enregistré sur ce
+                                                        navigateur.
+                                                    </p>
+                                                ) : (
+                                                    <ul className="leaderboard-list">
+                                                        {allTimeTopWins.map(
+                                                            (
+                                                                entry,
+                                                                index,
+                                                            ) => (
+                                                                <li
+                                                                    key={
+                                                                        entry.id
+                                                                    }
+                                                                    className="leaderboard-row"
+                                                                >
+                                                                    <span className="leaderboard-rank">
+                                                                        #
+                                                                        {index +
+                                                                            1}
+                                                                    </span>
+                                                                    <span className="leaderboard-name">
+                                                                        {
+                                                                            entry.playerName
+                                                                        }
+                                                                    </span>
+                                                                    <span className="leaderboard-amount">
+                                                                        {formatNumber(
+                                                                            entry.amount,
+                                                                            1,
+                                                                        )}
+                                                                    </span>
+                                                                    <span className="leaderboard-source">
+                                                                        {entry.source ===
+                                                                            'wheel'
+                                                                            ? 'Roue'
+                                                                            : entry.source ===
+                                                                                'case'
+                                                                                ? 'Caisse'
+                                                                                : 'High roll'}
+                                                                    </span>
+                                                                </li>
+                                                            ),
+                                                        )}
+                                                    </ul>
+                                                )}
+                                                <p className="leaderboard-note">
+                                                    Classement stocké uniquement
+                                                    dans ton navigateur.
+                                                </p>
+                                            </div>
+                                        </div>
+                                    </div>
                                 )}
-                                <p className="leaderboard-note">
-                                    Classement stocké uniquement dans ton navigateur (pas de
-                                    serveur, pas de compte).
-                                </p>
                             </div>
                         </section>
                     </section>
                 </section>
-            </main>
 
-            <footer className="app-footer">
-                <span>
-                    Fait avec ❤️ en React · Cookies virtuels uniquement · Pense à faire
-                    des pauses.
-                </span>
-            </footer>
+                {/* ZONE BASSE : CASINO pleine largeur */}
+                <section className="casino-section">
+                    <header className="casino-header">
+                        <div>
+                            <h2 className="section-title">
+                                Casino des cookies
+                            </h2>
+                            <p className="section-subtitle">
+                                Roue, lootboxes et coups de poker. L&apos;espérance
+                                est légèrement contre toi : parie uniquement
+                                pour t&apos;amuser.
+                            </p>
+                        </div>
+                    </header>
+
+                    <div className="casino-grid">
+                        {/* Roue de la chance */}
+                        <div
+                            className={`casino-card casino-card--wheel ${hasNeonFx ? 'casino-card--neon' : ''
+                                }`}
+                        >
+                            <div className="casino-card-header">
+                                <h3>Roue de la chance</h3>
+                                <p className="casino-helper">
+                                    Mise min. {MIN_WHEEL_BET} cookies
+                                </p>
+                            </div>
+
+                            <div className="wheel-controls">
+                                <input
+                                    type="number"
+                                    className="wheel-input"
+                                    min={MIN_WHEEL_BET}
+                                    value={wheelBet}
+                                    onChange={(
+                                        e: React.ChangeEvent<HTMLInputElement>,
+                                    ) =>
+                                        setWheelBet(
+                                            Math.max(
+                                                MIN_WHEEL_BET,
+                                                Number(e.target.value) || 0,
+                                            ),
+                                        )
+                                    }
+                                />
+                                <button
+                                    type="button"
+                                    className="primary-button"
+                                    onClick={handleWheelSpin}
+                                    disabled={
+                                        isWheelSpinning ||
+                                        game.cookies < MIN_WHEEL_BET
+                                    }
+                                >
+                                    {isWheelSpinning
+                                        ? 'La roue tourne...'
+                                        : 'Spin 🎰'}
+                                </button>
+                            </div>
+                            {lastWheelResult && (
+                                <p className="casino-last-result">
+                                    Résultat : {lastWheelResult.label} ·{' '}
+                                    {lastWheelResult.delta >= 0 ? '+' : ''}
+                                    {formatNumber(
+                                        lastWheelResult.delta,
+                                        1,
+                                    )}{' '}
+                                    cookies
+                                    {lastWheelResult.buffLabel && (
+                                        <>
+                                            {' · '}Buff :{' '}
+                                            {lastWheelResult.buffLabel}
+                                        </>
+                                    )}
+                                </p>
+                            )}
+                        </div>
+
+                        {/* Lootboxes */}
+                        <div
+                            className={`casino-card casino-card--cases ${hasNeonFx ? 'casino-card--neon' : ''
+                                }`}
+                        >
+                            <div className="casino-card-header">
+                                <h3>Lootboxes</h3>
+                                <p className="casino-helper">
+                                    Des boîtes surprises plus ou moins risquées.
+                                </p>
+                            </div>
+
+                            <div className="cases-list">
+                                {CASE_DEFINITIONS.map((c) => {
+                                    const disabled =
+                                        game.cookies < c.cost ||
+                                        openingCaseId === c.id;
+                                    const opening = openingCaseId === c.id;
+
+                                    return (
+                                        <button
+                                            key={c.id}
+                                            type="button"
+                                            className={`case-card ${disabled
+                                                    ? 'case-card--disabled'
+                                                    : ''
+                                                }`}
+                                            disabled={disabled}
+                                            onClick={() => handleOpenCase(c)}
+                                        >
+                                            <div className="case-main">
+                                                <span className="case-emoji">
+                                                    {c.emoji}
+                                                </span>
+                                                <div>
+                                                    <div className="case-name">
+                                                        {c.name}
+                                                    </div>
+                                                    <div className="case-desc">
+                                                        {c.description}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div className="case-meta">
+                                                <span>
+                                                    Coût :{' '}
+                                                    {formatNumber(c.cost, 0)}
+                                                </span>
+                                                <span>
+                                                    Jack :{' '}
+                                                    {c.jackpotMultiplier}x (
+                                                    {Math.round(
+                                                        c.jackpotChance * 100,
+                                                    )}
+                                                    %)
+                                                </span>
+                                            </div>
+                                            {opening && (
+                                                <div className="case-opening">
+                                                    Ouverture...
+                                                </div>
+                                            )}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                            {lastCaseResult && (
+                                <p className="casino-last-result">
+                                    Dernière caisse :{' '}
+                                    {lastCaseResult.caseName} ·{' '}
+                                    {lastCaseResult.isJackpot
+                                        ? 'JACKPOT 🎉 '
+                                        : lastCaseResult.isLoss
+                                            ? 'Aïe... 😬 '
+                                            : ''}
+                                    {lastCaseResult.reward >= 0 ? '+' : ''}
+                                    {formatNumber(
+                                        lastCaseResult.reward,
+                                        1,
+                                    )}{' '}
+                                    cookies
+                                </p>
+                            )}
+                        </div>
+
+                        {/* High roll */}
+                        <div
+                            className={`casino-card casino-card--highroll ${hasNeonFx ? 'casino-card--neon' : ''
+                                }`}
+                        >
+                            <div className="casino-card-header">
+                                <h3>Coup de poker</h3>
+                                <p className="casino-helper">
+                                    Mise élevée ou ALL-IN. Les chances ne sont
+                                    pas de ton côté. 💀
+                                </p>
+                            </div>
+
+                            <div className="highroll-actions">
+                                <button
+                                    type="button"
+                                    className="secondary-button"
+                                    disabled={game.cookies < 1_000}
+                                    onClick={() => handleHighRoll(false)}
+                                >
+                                    Mise forte
+                                </button>
+                                <button
+                                    type="button"
+                                    className="danger-button"
+                                    disabled={game.cookies < 1_000}
+                                    onClick={() => handleHighRoll(true)}
+                                >
+                                    ALL-IN 💀
+                                </button>
+                            </div>
+                            {lastHighRoll && (
+                                <p className="casino-last-result">
+                                    {lastHighRoll.allIn
+                                        ? 'ALL-IN'
+                                        : 'Mise'}{' '}
+                                    :{' '}
+                                    {formatNumber(
+                                        lastHighRoll.bet,
+                                        1,
+                                    )}{' '}
+                                    ·{' '}
+                                    {lastHighRoll.outcome === 'win'
+                                        ? 'Victoire 🎉'
+                                        : 'Défaite 😬'}{' '}
+                                    (
+                                    {lastHighRoll.delta >= 0 ? '+' : ''}
+                                    {formatNumber(
+                                        lastHighRoll.delta,
+                                        1,
+                                    )}{' '}
+                                    cookies)
+                                </p>
+                            )}
+                        </div>
+                    </div>
+
+                    <div className="casino-stats">
+                        <h3>Stats casino</h3>
+                        <div className="casino-stats-grid">
+                            <div className="casino-stat">
+                                <span>Roue jouée</span>
+                                <strong>
+                                    {game.gamblingStats.spinsPlayed} fois
+                                </strong>
+                            </div>
+                            <div className="casino-stat">
+                                <span>Lootboxes ouvertes</span>
+                                <strong>
+                                    {game.gamblingStats.casesOpened}
+                                </strong>
+                            </div>
+                            <div className="casino-stat">
+                                <span>High rolls</span>
+                                <strong>
+                                    {game.gamblingStats.highRollPlays}
+                                </strong>
+                            </div>
+                            <div className="casino-stat">
+                                <span>All-in tentés</span>
+                                <strong>
+                                    {game.gamblingStats.allInCount}
+                                </strong>
+                            </div>
+                            <div className="casino-stat">
+                                <span>Série de pertes max</span>
+                                <strong>
+                                    {
+                                        game.gamblingStats
+                                            .maxConsecutiveLosses
+                                    }
+                                </strong>
+                            </div>
+                            <div className="casino-stat">
+                                <span>Meilleur coup</span>
+                                <strong>
+                                    {formatNumber(
+                                        game.gamblingStats.biggestWin,
+                                        1,
+                                    )}{' '}
+                                    cookies
+                                </strong>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </main>
 
             {/* Modal pseudo joueur */}
             {isPlayerModalOpen && (
-                <div className="overlay overlay--visible">
-                    <div
-                        className="overlay-backdrop"
-                        onClick={() => setIsPlayerModalOpen(false)}
-                    />
-                    <div className="overlay-dialog">
+                <div className="modal-backdrop">
+                    <div className="modal-card">
                         <h2>Choisis ton pseudo</h2>
                         <p>
-                            Ton nom sera utilisé dans le classement local de ce navigateur.
+                            Il sera utilisé pour le classement local et global.
+                            Tu pourras le modifier plus tard.
                         </p>
                         <input
                             type="text"
-                            className="player-input"
+                            maxLength={16}
+                            className="modal-input"
                             value={playerNameDraft}
-                            onChange={(e) => setPlayerNameDraft(e.target.value)}
-                            maxLength={20}
-                            placeholder="Ex : RoiDuCookie"
+                            onChange={(
+                                e: React.ChangeEvent<HTMLInputElement>,
+                            ) => setPlayerNameDraft(e.target.value)}
                         />
-                        <div className="overlay-actions">
-                            <button
-                                type="button"
-                                className="secondary-button"
-                                onClick={() => setIsPlayerModalOpen(false)}
-                            >
-                                Annuler
-                            </button>
+                        <div className="modal-actions">
                             <button
                                 type="button"
                                 className="primary-button"
@@ -1859,27 +2684,34 @@ function App() {
 
             {/* Overlay résultat casino */}
             {overlay && (
-                <div className="overlay overlay--visible">
-                    <div className="overlay-backdrop" onClick={closeOverlay} />
-                    <div className="overlay-dialog overlay-dialog--result">
+                <div className="overlay-backdrop">
+                    <div className="overlay-card">
                         {overlay.kind === 'wheel' && (
                             <>
                                 <h2>Résultat de la roue</h2>
-                                <div className="overlay-wheel">
-                                    <div className="wheel wheel--overlay">
-                                        <div className="wheel-inner" />
-                                    </div>
-                                    <div className="wheel-pointer wheel-pointer--overlay" />
-                                </div>
                                 <p className="overlay-main">
                                     {overlay.result.label} · Mise :{' '}
-                                    {formatNumber(overlay.result.spent, 1)} ·{' '}
+                                    {formatNumber(
+                                        overlay.result.spent,
+                                        1,
+                                    )}{' '}
+                                    · Gain net :{' '}
                                     {overlay.result.delta >= 0 ? '+' : ''}
-                                    {formatNumber(overlay.result.delta, 1)} cookies
+                                    {formatNumber(
+                                        overlay.result.delta,
+                                        1,
+                                    )}{' '}
+                                    cookies
                                 </p>
+                                {overlay.result.isJackpot && (
+                                    <p className="overlay-sub">
+                                        🎉 JACKPOT de cookies !
+                                    </p>
+                                )}
                                 {overlay.result.buffLabel && (
                                     <p className="overlay-sub">
-                                        Buff activé : {overlay.result.buffLabel}
+                                        Buff obtenu :{' '}
+                                        {overlay.result.buffLabel}
                                     </p>
                                 )}
                             </>
@@ -1888,36 +2720,29 @@ function App() {
                         {overlay.kind === 'case' && (
                             <>
                                 <h2>Résultat de la caisse</h2>
-                                <div className="overlay-case-rail">
-                                    <div className="overlay-case-strip">
-                                        <div className="overlay-case-item overlay-case-item--bad">
-                                            x0,3
-                                        </div>
-                                        <div className="overlay-case-item">x0,8</div>
-                                        <div className="overlay-case-item">x1,2</div>
-                                        <div className="overlay-case-item">x2</div>
-                                        <div className="overlay-case-item overlay-case-item--jackpot">
-                                            JACKPOT
-                                        </div>
-                                        <div className="overlay-case-item">x1,5</div>
-                                        <div className="overlay-case-item overlay-case-item--bad">
-                                            x0,3
-                                        </div>
-                                    </div>
-                                    <div className="overlay-case-cursor" />
-                                </div>
                                 <p className="overlay-main">
-                                    {overlay.result.caseName} · Gain :{' '}
-                                    {formatNumber(overlay.result.reward, 1)} cookies (
-                                    {overlay.result.reward - overlay.result.spent >= 0 ? '+' : ''}
+                                    {overlay.result.caseName} · Mise :{' '}
                                     {formatNumber(
-                                        overlay.result.reward - overlay.result.spent,
+                                        overlay.result.spent,
                                         1,
                                     )}{' '}
-                                    net)
+                                    · Récompense :{' '}
+                                    {formatNumber(
+                                        overlay.result.reward,
+                                        1,
+                                    )}{' '}
+                                    cookies
                                 </p>
                                 {overlay.result.isJackpot && (
-                                    <p className="overlay-sub">🎉 JACKPOT de cookies !</p>
+                                    <p className="overlay-sub">
+                                        🎉 JACKPOT dans la lootbox !
+                                    </p>
+                                )}
+                                {overlay.result.isLoss && (
+                                    <p className="overlay-sub">
+                                        Aïe… petit rappel des probabilités du
+                                        casino.
+                                    </p>
                                 )}
                             </>
                         )}
@@ -1926,13 +2751,25 @@ function App() {
                             <>
                                 <h2>Coup de poker</h2>
                                 <p className="overlay-main">
-                                    {overlay.result.allIn ? 'ALL-IN' : 'Mise élevée'} · Mise :{' '}
-                                    {formatNumber(overlay.result.bet, 1)} · Résultat :{' '}
+                                    {overlay.result.allIn
+                                        ? 'ALL-IN'
+                                        : 'Mise élevée'}
+                                    {' · '}Mise :{' '}
+                                    {formatNumber(
+                                        overlay.result.bet,
+                                        1,
+                                    )}{' '}
+                                    · Résultat :{' '}
                                     {overlay.result.outcome === 'win'
                                         ? 'Victoire 🎉'
                                         : 'Défaite 😬'}{' '}
-                                    ({overlay.result.delta >= 0 ? '+' : ''}
-                                    {formatNumber(overlay.result.delta, 1)} cookies)
+                                    (
+                                    {overlay.result.delta >= 0 ? '+' : ''}
+                                    {formatNumber(
+                                        overlay.result.delta,
+                                        1,
+                                    )}{' '}
+                                    cookies)
                                 </p>
                             </>
                         )}
