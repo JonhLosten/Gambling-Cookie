@@ -1,11 +1,9 @@
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
 
+// https://vitejs.dev/config/
 export default defineConfig({
-    plugins: [react()],
-    server: {
-        allowedHosts: [
-            'f1cad847a962.ngrok-free.app'
-        ]
-    }
-})
+  plugins: [react()],
+  // IMPORTANT pour GitHub Pages : doit être le nom du repo
+  base: '/Gambling-Cookie/',
+});
