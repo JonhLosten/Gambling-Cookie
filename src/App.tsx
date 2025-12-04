@@ -790,6 +790,13 @@ const ACHIEVEMENTS: Achievement[] = [
     },
 ];
 
+const DEFAULT_PLAYER_NAME = 'Invité';
+
+const sanitizePlayerName = (rawName?: string | null): string => {
+    const trimmed = (rawName ?? '').trim().slice(0, 16);
+    return trimmed || DEFAULT_PLAYER_NAME;
+};
+
 const defaultGameState: GameState = {
     cookies: 0,
     totalCookies: 0,
@@ -828,7 +835,7 @@ const defaultGameState: GameState = {
         jackpotStreak: 0,
         maxJackpotStreak: 0,
     },
-    playerName: '',
+    playerName: DEFAULT_PLAYER_NAME,
     leaderboard: [],
     totalClicks: 0,
     totalUpgradesPurchased: 0,
@@ -1115,9 +1122,92 @@ function App() {
     const [activeInfoTab, setActiveInfoTab] =
         useState<InfoTabId>('upgrades');
 
-    const [isPlayerModalOpen, setIsPlayerModalOpen] = useState(false);
     const [playerNameDraft, setPlayerNameDraft] = useState(
-        game.playerName || '',
+        game.playerName || DEFAULT_PLAYER_NAME,
+    );
+    const [isAuthPanelOpen, setIsAuthPanelOpen] = useState(false);
+    const [isAuthNudgeDismissed, setIsAuthNudgeDismissed] = useState(false);
+
+    const isLocked = !currentUser;
+
+    const ensureConnected = useCallback(() => {
+        if (!currentUser) {
+            setLockMessage('Connecte-toi pour jouer.');
+            setAuthMessage('Connexion requise pour jouer.');
+            setIsAuthPanelOpen(true);
+            return false;
+        }
+        return true;
+    }, [currentUser]);
+
+    const handleSignup = async (event?: React.SyntheticEvent) => {
+        event?.preventDefault();
+        setAuthMessage('');
+        try {
+            const cred = await createUserWithEmailAndPassword(
+                auth,
+                authEmail.trim(),
+                authPassword,
+            );
+            const displayName = sanitizePlayerName(playerNameDraft);
+            await updateProfile(cred.user, { displayName });
+            setAuthMessage('Compte créé et connecté.');
+        } catch (error: any) {
+            setAuthMessage(error?.message ?? 'Erreur de création de compte.');
+        }
+    };
+
+    const handleLogin = async (event?: React.SyntheticEvent) => {
+        event?.preventDefault();
+        setAuthMessage('');
+        try {
+            await signInWithEmailAndPassword(
+                auth,
+                authEmail.trim(),
+                authPassword,
+            );
+            setAuthMessage('Connexion réussie.');
+        } catch (error: any) {
+            setAuthMessage(error?.message ?? 'Connexion impossible.');
+        }
+    };
+
+    const handlePasswordReset = async () => {
+        if (!authEmail.trim()) {
+            setAuthMessage('Saisis ton email pour réinitialiser.');
+            return;
+        }
+        try {
+            await sendPasswordResetEmail(auth, authEmail.trim());
+            setAuthMessage('Email de réinitialisation envoyé.');
+        } catch (error: any) {
+            setAuthMessage(error?.message ?? 'Erreur de réinitialisation.');
+        }
+    };
+
+    const handleLogout = async () => {
+        await signOut(auth);
+        setAuthMessage('Déconnecté.');
+    };
+
+    const handleCloudSave = useCallback(
+        async (silent = false) => {
+            if (!ensureConnected() || !currentUser) return;
+            try {
+                await setDoc(doc(db, 'cloudSaves', currentUser.uid), {
+                    userId: currentUser.uid,
+                    updatedAt: serverTimestamp(),
+                    state: game,
+                });
+                if (!silent) setCloudMessage('Sauvegarde cloud effectuée.');
+            } catch (error: any) {
+                if (!silent)
+                    setCloudMessage(
+                        error?.message ?? 'Erreur lors de la sauvegarde cloud.',
+                    );
+            }
+        },
+        [currentUser, ensureConnected, game],
     );
     const [isAuthPanelOpen, setIsAuthPanelOpen] = useState(false);
 
@@ -1264,6 +1354,70 @@ function App() {
         }
     }, [currentUser]);
 
+    const handleCloudLoad = useCallback(async () => {
+        if (!ensureConnected() || !currentUser) return;
+        const snap = await getDoc(doc(db, 'cloudSaves', currentUser.uid));
+        if (!snap.exists()) {
+            setCloudMessage('Aucune sauvegarde cloud disponible.');
+            return;
+        }
+        const data = snap.data() as { state?: GameState };
+        const cloudState = data?.state ? safeMergeGameState(data.state) : null;
+        if (cloudState) {
+            setGame(cloudState);
+            setCloudMessage('Sauvegarde cloud chargée.');
+        }
+    }, [currentUser, ensureConnected]);
+
+    useEffect(() => {
+        const unsubscribe = onAuthStateChanged(auth, async (user) => {
+            setCurrentUser(user);
+            if (!user) {
+                setGame({ ...defaultGameState });
+                setCloudMessage('Connecte-toi pour jouer.');
+                setIsAuthNudgeDismissed(false);
+                return;
+            }
+
+            const localState = loadGameState(user.uid);
+            const cloudDoc = await getDoc(doc(db, 'cloudSaves', user.uid));
+            let nextState = { ...localState };
+
+            if (cloudDoc.exists()) {
+                const data = cloudDoc.data() as { state?: GameState };
+                const cloudState = data?.state ? safeMergeGameState(data.state) : null;
+                if (cloudState && cloudState.totalCookies > localState.totalCookies) {
+                    const useCloud = window.confirm(
+                        'Une sauvegarde cloud plus récente existe. Charger le cloud ?',
+                    );
+                    if (useCloud) {
+                        nextState = cloudState;
+                        setCloudMessage('Sauvegarde cloud chargée.');
+                    } else {
+                        setCloudMessage('Cloud ignoré, cache local conservé.');
+                    }
+                }
+            }
+
+            const displayName = sanitizePlayerName(
+                user.displayName ?? nextState.playerName,
+            );
+            setGame({ ...nextState, playerName: displayName });
+            setPlayerNameDraft(displayName ?? DEFAULT_PLAYER_NAME);
+            setAuthEmail('');
+            setAuthPassword('');
+            setAuthMessage('Connecté.');
+        });
+
+        return () => unsubscribe();
+    }, []);
+
+    useEffect(() => {
+        if (currentUser) {
+            setIsAuthPanelOpen(false);
+        }
+    }, [currentUser]);
+
     const effectiveCps = useMemo(() => computeEffectiveCps(game), [game]);
     const cookiesPerClick = useMemo(
         () => computeCookiesPerClick(game),
@@ -1371,11 +1525,8 @@ function App() {
         document.documentElement.dataset.theme = game.theme;
     }, [game.theme]);
 
-    // Pseudo au premier lancement
     useEffect(() => {
-        if (!game.playerName) {
-            setIsPlayerModalOpen(true);
-        }
+        setPlayerNameDraft(game.playerName || DEFAULT_PLAYER_NAME);
     }, [game.playerName]);
 
     // Sync meilleur gain local -> Firestore
@@ -1634,7 +1785,7 @@ function App() {
                     id: `wheel-${Date.now()}-${Math.random()
                         .toString(36)
                         .slice(2)}`,
-                    playerName: prev.playerName || 'Invité',
+                    playerName: prev.playerName || DEFAULT_PLAYER_NAME,
                     amount: delta,
                     date: new Date().toISOString(),
                     source: 'wheel',
@@ -1747,7 +1898,7 @@ function App() {
                         id: `case-${Date.now()}-${Math.random()
                             .toString(36)
                             .slice(2)}`,
-                        playerName: prev.playerName || 'Invité',
+                        playerName: prev.playerName || DEFAULT_PLAYER_NAME,
                         amount: delta,
                         date: new Date().toISOString(),
                         source: 'case',
@@ -1844,7 +1995,7 @@ function App() {
                     id: `highroll-${Date.now()}-${Math.random()
                         .toString(36)
                         .slice(2)}`,
-                    playerName: prev.playerName || 'Invité',
+                    playerName: prev.playerName || DEFAULT_PLAYER_NAME,
                     amount: delta,
                     date: new Date().toISOString(),
                     source: 'highroll',
@@ -1925,14 +2076,16 @@ function App() {
                     <div className="player-chip">
                         <span className="player-chip-label">Joueur</span>
                         <span className="player-chip-name">
-                            {game.playerName || 'Invité'}
+                            {game.playerName || DEFAULT_PLAYER_NAME}
                         </span>
                         <button
                             type="button"
                             className="player-chip-edit"
                             onClick={() => {
-                                setPlayerNameDraft(game.playerName || '');
-                                setIsPlayerModalOpen(true);
+                                setPlayerNameDraft(
+                                    game.playerName || DEFAULT_PLAYER_NAME,
+                                );
+                                setIsAuthPanelOpen(true);
                             }}
                         >
                             ✏️
@@ -3058,8 +3211,146 @@ function App() {
                             </button>
                         </div>
                     </div>
+                    <button
+                        type="button"
+                        className="primary-button auth-nudge__button"
+                        onClick={() => setIsAuthPanelOpen(true)}
+                    >
+                        Ouvrir
+                    </button>
                 </div>
             )}
+
+            <div
+                className={`auth-widget ${
+                    isAuthPanelOpen ? 'auth-widget--open' : ''
+                }`}
+            >
+                <div className="auth-widget__header">
+                    <div>
+                        <div className="auth-widget__title">
+                            {currentUser
+                                ? 'Profil & sauvegarde cloud'
+                                : 'Connexion / inscription'}
+                        </div>
+                        <div className="auth-widget__subtitle">
+                            {currentUser
+                                ? 'Gère ton pseudo et ta sauvegarde sécurisée.'
+                                : 'Aucun jeu hors ligne : connecte-toi pour cliquer et jouer.'}
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        className="ghost-button auth-widget__close"
+                        onClick={() => setIsAuthPanelOpen(false)}
+                    >
+                        ✕
+                    </button>
+                </div>
+
+                <div className="auth-widget__body">
+                    <div className="auth-widget__inputs">
+                        <input
+                            className="auth-input"
+                            type="email"
+                            placeholder="Email"
+                            value={authEmail}
+                            onChange={(e) => setAuthEmail(e.target.value)}
+                        />
+                        <input
+                            className="auth-input"
+                            type="password"
+                            placeholder="Mot de passe"
+                            value={authPassword}
+                            onChange={(e) => setAuthPassword(e.target.value)}
+                        />
+                    </div>
+
+                    <div className="auth-widget__actions">
+                        <button
+                            type="button"
+                            className="primary-button"
+                            onClick={handleLogin}
+                            disabled={!authEmail || !authPassword}
+                        >
+                            Connexion
+                        </button>
+                        <button
+                            type="button"
+                            className="secondary-button"
+                            onClick={handleSignup}
+                            disabled={!authEmail || !authPassword}
+                        >
+                            Créer un compte
+                        </button>
+                        <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={handlePasswordReset}
+                            disabled={!authEmail}
+                        >
+                            Mot de passe oublié
+                        </button>
+                    </div>
+
+                    <div className="auth-widget__status">{authMessage}</div>
+
+                    {currentUser && (
+                        <>
+                            <div className="auth-widget__profile">
+                                <div className="auth-widget__label">Pseudo public</div>
+                                <div className="auth-widget__name-row">
+                                    <input
+                                        className="auth-input"
+                                        type="text"
+                                        maxLength={16}
+                                        value={playerNameDraft}
+                                        onChange={(e) =>
+                                            setPlayerNameDraft(e.target.value)
+                                        }
+                                    />
+                                    <button
+                                        type="button"
+                                        className="ghost-button"
+                                        onClick={handleSavePlayerName}
+                                        disabled={!playerNameDraft.trim()}
+                                    >
+                                        Mettre à jour
+                                    </button>
+                                </div>
+                            </div>
+                            <div className="auth-widget__cloud">
+                                <button
+                                    type="button"
+                                    className="ghost-button"
+                                    onClick={() => handleCloudSave(false)}
+                                >
+                                    Sauvegarde cloud
+                                </button>
+                                <button
+                                    type="button"
+                                    className="ghost-button"
+                                    onClick={handleCloudLoad}
+                                >
+                                    Charger depuis le cloud
+                                </button>
+                                <button
+                                    type="button"
+                                    className="ghost-button ghost-button--danger"
+                                    onClick={handleLogout}
+                                >
+                                    Se déconnecter
+                                </button>
+                            </div>
+                            {cloudMessage && (
+                                <div className="auth-widget__status">
+                                    {cloudMessage}
+                                </div>
+                            )}
+                        </>
+                    )}
+                </div>
+            </div>
 
             {/* Overlay résultat casino */}
             {overlay && (
