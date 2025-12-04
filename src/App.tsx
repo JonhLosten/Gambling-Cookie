@@ -790,6 +790,8 @@ const ACHIEVEMENTS: Achievement[] = [
     },
 ];
 
+const DEFAULT_PLAYER_NAME = 'Invité';
+
 const defaultGameState: GameState = {
     cookies: 0,
     totalCookies: 0,
@@ -828,7 +830,7 @@ const defaultGameState: GameState = {
         jackpotStreak: 0,
         maxJackpotStreak: 0,
     },
-    playerName: 'Invité',
+    playerName: DEFAULT_PLAYER_NAME,
     leaderboard: [],
     totalClicks: 0,
     totalUpgradesPurchased: 0,
@@ -1049,7 +1051,7 @@ async function pushWinToGlobalLeaderboard(
 ) {
     if (!user) return;
 
-    const safeName = (playerName || 'Invité').trim().slice(0, 16);
+    const safeName = (playerName || DEFAULT_PLAYER_NAME).trim().slice(0, 16);
     const safeScore = Math.max(0, Math.round(amount));
 
     if (!safeScore) return;
@@ -1118,7 +1120,7 @@ function App() {
         useState<InfoTabId>('upgrades');
 
     const [playerNameDraft, setPlayerNameDraft] = useState(
-        game.playerName || 'Invité',
+        game.playerName || DEFAULT_PLAYER_NAME,
     );
     const [isAuthPanelOpen, setIsAuthPanelOpen] = useState(false);
     const [isAuthNudgeDismissed, setIsAuthNudgeDismissed] = useState(false);
@@ -1145,7 +1147,7 @@ function App() {
                 authPassword,
             );
             const displayName =
-                playerNameDraft.trim().slice(0, 16) || 'Invité';
+                playerNameDraft.trim().slice(0, 16) || DEFAULT_PLAYER_NAME;
             await updateProfile(cred.user, { displayName });
             setAuthMessage('Compte créé et connecté.');
         } catch (error: any) {
@@ -1253,7 +1255,7 @@ function App() {
 
             const displayName = user.displayName?.slice(0, 16) ?? nextState.playerName;
             setGame({ ...nextState, playerName: displayName });
-            setPlayerNameDraft(displayName ?? 'Invité');
+            setPlayerNameDraft(displayName ?? DEFAULT_PLAYER_NAME);
             setAuthEmail('');
             setAuthPassword('');
             setAuthMessage('Connecté.');
@@ -1376,7 +1378,7 @@ function App() {
     }, [game.theme]);
 
     useEffect(() => {
-        setPlayerNameDraft(game.playerName || 'Invité');
+        setPlayerNameDraft(game.playerName || DEFAULT_PLAYER_NAME);
     }, [game.playerName]);
 
     // Sync meilleur gain local -> Firestore
@@ -1545,7 +1547,7 @@ function App() {
     const handleSavePlayerName = () => {
         if (!ensureConnected()) return;
         const trimmed = playerNameDraft.trim().slice(0, 16);
-        const safeName = trimmed || 'Invité';
+        const safeName = trimmed || DEFAULT_PLAYER_NAME;
         setGame((prev) => ({
             ...prev,
             playerName: safeName,
@@ -1634,7 +1636,7 @@ function App() {
                     id: `wheel-${Date.now()}-${Math.random()
                         .toString(36)
                         .slice(2)}`,
-                    playerName: prev.playerName || 'Invité',
+                    playerName: prev.playerName || DEFAULT_PLAYER_NAME,
                     amount: delta,
                     date: new Date().toISOString(),
                     source: 'wheel',
@@ -1747,7 +1749,7 @@ function App() {
                         id: `case-${Date.now()}-${Math.random()
                             .toString(36)
                             .slice(2)}`,
-                        playerName: prev.playerName || 'Invité',
+                        playerName: prev.playerName || DEFAULT_PLAYER_NAME,
                         amount: delta,
                         date: new Date().toISOString(),
                         source: 'case',
@@ -1844,7 +1846,7 @@ function App() {
                     id: `highroll-${Date.now()}-${Math.random()
                         .toString(36)
                         .slice(2)}`,
-                    playerName: prev.playerName || 'Invité',
+                    playerName: prev.playerName || DEFAULT_PLAYER_NAME,
                     amount: delta,
                     date: new Date().toISOString(),
                     source: 'highroll',
@@ -1925,13 +1927,15 @@ function App() {
                     <div className="player-chip">
                         <span className="player-chip-label">Joueur</span>
                         <span className="player-chip-name">
-                            {game.playerName || 'Invité'}
+                            {game.playerName || DEFAULT_PLAYER_NAME}
                         </span>
                         <button
                             type="button"
                             className="player-chip-edit"
                             onClick={() => {
-                                setPlayerNameDraft(game.playerName || 'Invité');
+                                setPlayerNameDraft(
+                                    game.playerName || DEFAULT_PLAYER_NAME,
+                                );
                                 setIsAuthPanelOpen(true);
                             }}
                         >
