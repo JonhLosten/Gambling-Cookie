@@ -959,6 +959,9 @@ function safeMergeGameState(rawState: unknown): GameState {
             ...defaultGameState.gamblingStats,
             ...(parsed.gamblingStats ?? {}),
         },
+        playerName: sanitizePlayerName(
+            parsed.playerName ?? defaultGameState.playerName,
+        ),
         playerName: (parsed.playerName ?? '').slice(0, 16),
         leaderboard: (parsed.leaderboard ?? []).slice(0, 50),
         totalClicks: clampNumber(parsed.totalClicks ?? 0, 1e9),
@@ -1022,8 +1025,13 @@ function loadGameState(uid: string | null): GameState {
 function persistGame(state: GameState, uid: string | null) {
     if (typeof window === 'undefined' || !uid) return;
 
-    const payload = {
+    const safeState = {
         ...state,
+        playerName: sanitizePlayerName(state.playerName),
+    };
+
+    const payload = {
+        ...safeState,
         lastSaved: Date.now(),
     };
 
@@ -1054,6 +1062,7 @@ async function pushWinToGlobalLeaderboard(
 ) {
     if (!user) return;
 
+    const safeName = sanitizePlayerName(playerName);
     const safeName = (playerName || 'Invité').trim().slice(0, 16);
     const safeScore = Math.max(0, Math.round(amount));
 
@@ -1123,6 +1132,7 @@ function App() {
         useState<InfoTabId>('upgrades');
 
     const [playerNameDraft, setPlayerNameDraft] = useState(
+        sanitizePlayerName(game.playerName),
         game.playerName || DEFAULT_PLAYER_NAME,
     );
     const [isAuthPanelOpen, setIsAuthPanelOpen] = useState(false);
@@ -1526,6 +1536,7 @@ function App() {
     }, [game.theme]);
 
     useEffect(() => {
+        setPlayerNameDraft(sanitizePlayerName(game.playerName));
         setPlayerNameDraft(game.playerName || DEFAULT_PLAYER_NAME);
     }, [game.playerName]);
 
@@ -1694,6 +1705,7 @@ function App() {
 
     const handleSavePlayerName = () => {
         if (!ensureConnected()) return;
+        const safeName = sanitizePlayerName(playerNameDraft);
         const trimmed = playerNameDraft.trim().slice(0, 16);
         const safeName = trimmed || 'Joueur';
         setGame((prev) => ({
@@ -3053,6 +3065,16 @@ function App() {
                 </section>
             </main>
 
+            {!currentUser && !isAuthPanelOpen && !isAuthNudgeDismissed && (
+                <div className="auth-nudge">
+                    <button
+                        type="button"
+                        className="auth-nudge__close"
+                        aria-label="Fermer le rappel d'inscription"
+                        onClick={() => setIsAuthNudgeDismissed(true)}
+                    >
+                        ✕
+                    </button>
             {!currentUser && !isAuthPanelOpen && (
                 <div className="auth-nudge">
                     <div>
