@@ -396,10 +396,10 @@ body {
     justify-content: center;
 }
 
-    .player-chip-edit:hover {
-        opacity: 1;
-        transform: translateY(-1px);
-    }
+.player-chip-edit:hover {
+    opacity: 1;
+    transform: translateY(-1px);
+}
 
 /* Buttons */
 
@@ -472,22 +472,22 @@ body {
     transition: transform 80ms ease-out, box-shadow 140ms ease-out, filter 140ms ease-out, opacity 80ms ease-out;
 }
 
-    .primary-button:hover:not([disabled]) {
-        transform: translateY(-1px);
-        box-shadow: 0 16px 34px rgba(0, 0, 0, 0.9);
-        filter: brightness(1.06);
-    }
+.primary-button:hover:not([disabled]) {
+    transform: translateY(-1px);
+    box-shadow: 0 16px 34px rgba(0, 0, 0, 0.9);
+    filter: brightness(1.06);
+}
 
-    .primary-button:active:not([disabled]) {
-        transform: translateY(1px) scale(0.97);
-        box-shadow: 0 8px 18px rgba(0, 0, 0, 0.8);
-    }
+.primary-button:active:not([disabled]) {
+    transform: translateY(1px) scale(0.97);
+    box-shadow: 0 8px 18px rgba(0, 0, 0, 0.8);
+}
 
-    .primary-button[disabled] {
-        opacity: 0.45;
-        cursor: not-allowed;
-        box-shadow: none;
-    }
+.primary-button[disabled] {
+    opacity: 0.45;
+    cursor: not-allowed;
+    box-shadow: none;
+}
 
 .secondary-button {
     font: inherit;
@@ -505,17 +505,17 @@ body {
     transition: transform 80ms ease-out, box-shadow 140ms ease-out, background 140ms ease-out, opacity 80ms ease-out;
 }
 
-    .secondary-button:hover:not([disabled]) {
-        transform: translateY(-1px);
-        background: radial-gradient(circle at top, #4b153b 0, #16030c 100%);
-        box-shadow: 0 12px 26px rgba(0, 0, 0, 0.7);
-    }
+.secondary-button:hover:not([disabled]) {
+    transform: translateY(-1px);
+    background: radial-gradient(circle at top, #4b153b 0, #16030c 100%);
+    box-shadow: 0 12px 26px rgba(0, 0, 0, 0.7);
+}
 
-    .secondary-button[disabled] {
-        opacity: 0.45;
-        cursor: not-allowed;
-        box-shadow: none;
-    }
+.secondary-button[disabled] {
+    opacity: 0.45;
+    cursor: not-allowed;
+    box-shadow: none;
+}
 
 .danger-button {
     font: inherit;
