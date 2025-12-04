@@ -12,8 +12,23 @@ import {
     orderBy,
     limit,
     onSnapshot,
+    doc,
+    setDoc,
+    getDoc,
 } from 'firebase/firestore';
-import { db } from './firebase';
+import {
+    auth,
+    db,
+} from './firebase';
+import {
+    User,
+    onAuthStateChanged,
+    createUserWithEmailAndPassword,
+    signInWithEmailAndPassword,
+    sendPasswordResetEmail,
+    signOut,
+    updateProfile,
+} from 'firebase/auth';
 import './App.css';
 
 type Theme = 'light' | 'dark';
@@ -172,11 +187,16 @@ interface GlobalEntry {
     createdAt?: Date;
 }
 
-const STORAGE_KEY = 'imtmortels-cookie-clicker-v6';
-const COOKIE_KEY = 'imtmortels_cookie_save';
+const STORAGE_KEY_PREFIX = 'imtmortels-cookie-clicker-v6';
+const COOKIE_KEY_PREFIX = 'imtmortels_cookie_save';
 const LAST_SYNCED_BEST_KEY = 'imtmortels_last_synced_best';
 
+const MAX_REASONABLE_COOKIES = 1e15;
+
 const MIN_WHEEL_BET = 100;
+
+const storageKeyForUser = (uid: string) => `${STORAGE_KEY_PREFIX}_${uid}`;
+const cookieKeyForUser = (uid: string) => `${COOKIE_KEY_PREFIX}_${uid}`;
 
 const UPGRADE_DEFINITIONS: UpgradeDefinition[] = [
     // AUTOS / BUILDINGS
@@ -904,35 +924,56 @@ function readCookie(name: string): string | null {
 
 function safeMergeGameState(rawState: unknown): GameState {
     const parsed = rawState as Partial<GameState> & { lastSaved?: number };
+    const sanitizedUpgrades = Object.entries(parsed.upgrades ?? {}).reduce(
+        (acc, [key, value]) => {
+            if (!Number.isFinite(value)) return acc;
+            const numeric = Math.max(0, Math.floor(value));
+            acc[key as UpgradeId] = numeric;
+            return acc;
+        },
+        { ...defaultGameState.upgrades },
+    );
+
+    const clampNumber = (value: number, max = MAX_REASONABLE_COOKIES) =>
+        Math.min(max, Math.max(0, Number.isFinite(value) ? value : 0));
+
     const merged: GameState = {
         ...defaultGameState,
         ...parsed,
-        upgrades: {
-            ...defaultGameState.upgrades,
-            ...(parsed.upgrades ?? {}),
-        },
-        activeBuffs: parsed.activeBuffs ?? [],
+        cookies: clampNumber(parsed.cookies ?? defaultGameState.cookies),
+        totalCookies: clampNumber(
+            parsed.totalCookies ?? defaultGameState.totalCookies,
+        ),
+        upgrades: sanitizedUpgrades,
+        activeBuffs: (parsed.activeBuffs ?? []).filter(
+            (buff) => buff.expiresAt > Date.now() && buff.expiresAt < Date.now() + 86_400_000,
+        ),
         gamblingStats: {
             ...defaultGameState.gamblingStats,
             ...(parsed.gamblingStats ?? {}),
         },
-        playerName: parsed.playerName ?? '',
-        leaderboard: parsed.leaderboard ?? [],
-        totalClicks: parsed.totalClicks ?? 0,
-        totalUpgradesPurchased: parsed.totalUpgradesPurchased ?? 0,
+        playerName: (parsed.playerName ?? '').slice(0, 16),
+        leaderboard: (parsed.leaderboard ?? []).slice(0, 50),
+        totalClicks: clampNumber(parsed.totalClicks ?? 0, 1e9),
+        totalUpgradesPurchased: clampNumber(
+            parsed.totalUpgradesPurchased ?? 0,
+            1e9,
+        ),
     };
 
     const lastSaved = (rawState as { lastSaved?: number }).lastSaved;
     if (typeof lastSaved === 'number') {
-        const elapsedSeconds = (Date.now() - lastSaved) / 1000;
-        // progression offline basée sur le CPS de base, pas les buffs
+        const elapsedSeconds = Math.min(
+            86_400,
+            Math.max(0, (Date.now() - lastSaved) / 1000),
+        );
         const cps = computeBaseCps(merged);
-        const gained = Math.max(0, cps * elapsedSeconds);
+        const gained = Math.max(0, Math.min(MAX_REASONABLE_COOKIES, cps * elapsedSeconds));
 
         return {
             ...merged,
-            cookies: merged.cookies + gained,
-            totalCookies: merged.totalCookies + gained,
+            cookies: clampNumber(merged.cookies + gained),
+            totalCookies: clampNumber(merged.totalCookies + gained),
             activeBuffs: merged.activeBuffs.filter(
                 (buff) => buff.expiresAt > Date.now(),
             ),
@@ -942,11 +983,14 @@ function safeMergeGameState(rawState: unknown): GameState {
     return merged;
 }
 
-function loadGameState(): GameState {
-    if (typeof window === 'undefined') return { ...defaultGameState };
+function loadGameState(uid: string | null): GameState {
+    if (typeof window === 'undefined' || !uid) return { ...defaultGameState };
+
+    const storageKey = storageKeyForUser(uid);
+    const cookieKey = cookieKeyForUser(uid);
 
     try {
-        const local = window.localStorage.getItem(STORAGE_KEY);
+        const local = window.localStorage.getItem(storageKey);
         if (local) {
             const parsed = JSON.parse(local);
             return safeMergeGameState(parsed);
@@ -956,7 +1000,7 @@ function loadGameState(): GameState {
     }
 
     try {
-        const cookieValue = readCookie(COOKIE_KEY);
+        const cookieValue = readCookie(cookieKey);
         if (cookieValue) {
             const parsed = JSON.parse(cookieValue);
             return safeMergeGameState(parsed);
@@ -968,23 +1012,26 @@ function loadGameState(): GameState {
     return { ...defaultGameState };
 }
 
-function persistGame(state: GameState) {
-    if (typeof window === 'undefined') return;
+function persistGame(state: GameState, uid: string | null) {
+    if (typeof window === 'undefined' || !uid) return;
 
     const payload = {
         ...state,
         lastSaved: Date.now(),
     };
 
+    const storageKey = storageKeyForUser(uid);
+    const cookieKey = cookieKeyForUser(uid);
+
     try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+        localStorage.setItem(storageKey, JSON.stringify(payload));
     } catch (error) {
         console.error('Erreur de sauvegarde localStorage :', error);
     }
 
     try {
         if (typeof document !== 'undefined') {
-            document.cookie = `${COOKIE_KEY}=${encodeURIComponent(
+            document.cookie = `${cookieKey}=${encodeURIComponent(
                 JSON.stringify(payload),
             )};path=/;max-age=31536000`;
         }
@@ -994,19 +1041,22 @@ function persistGame(state: GameState) {
 }
 
 async function pushWinToGlobalLeaderboard(
+    user: User | null,
     playerName: string,
     amount: number,
 ) {
+    if (!user) return;
+
     const safeName = (playerName || 'Invité').trim().slice(0, 16);
     const safeScore = Math.max(0, Math.round(amount));
 
     if (!safeScore) return;
-    // Anti-cheat basique : valeurs absurdes ignorées
-    if (!Number.isFinite(safeScore) || safeScore > 1e15) return;
+    if (!Number.isFinite(safeScore) || safeScore > MAX_REASONABLE_COOKIES) return;
 
     try {
         await addDoc(collection(db, 'leaderboard'), {
             name: safeName,
+            userId: user.uid,
             score: safeScore,
             createdAt: serverTimestamp(),
         });
@@ -1027,7 +1077,12 @@ function pruneExpiredBuffs(buffs: ActiveBuff[]): ActiveBuff[] {
 type InfoTabId = 'upgrades' | 'achievements' | 'leaderboard';
 
 function App() {
-    const [game, setGame] = useState<GameState>(() => loadGameState());
+    const [currentUser, setCurrentUser] = useState<User | null>(null);
+    const [authEmail, setAuthEmail] = useState('');
+    const [authPassword, setAuthPassword] = useState('');
+    const [authMessage, setAuthMessage] = useState('');
+    const [cloudMessage, setCloudMessage] = useState('');
+    const [game, setGame] = useState<GameState>({ ...defaultGameState });
 
     const [globalLeaderboard, setGlobalLeaderboard] = useState<GlobalEntry[]>(
         [],
@@ -1050,6 +1105,9 @@ function App() {
         useState<LastHighRollResult | null>(null);
     const [wheelBet, setWheelBet] = useState<number>(500);
     const [overlay, setOverlay] = useState<OverlayState>(null);
+    const [lockMessage, setLockMessage] = useState(
+        'Connecte-toi pour jouer.',
+    );
 
     const [selectedUpgradeCategory, setSelectedUpgradeCategory] =
         useState<UpgradeCategoryId>('auto');
@@ -1061,6 +1119,150 @@ function App() {
     const [playerNameDraft, setPlayerNameDraft] = useState(
         game.playerName || '',
     );
+    const [isAuthPanelOpen, setIsAuthPanelOpen] = useState(false);
+
+    const isLocked = !currentUser;
+
+    const ensureConnected = useCallback(() => {
+        if (!currentUser) {
+            setLockMessage('Connecte-toi pour jouer.');
+            setAuthMessage('Connexion requise pour jouer.');
+            setIsAuthPanelOpen(true);
+            return false;
+        }
+        return true;
+    }, [currentUser]);
+
+    const handleSignup = async (event?: React.SyntheticEvent) => {
+        event?.preventDefault();
+        setAuthMessage('');
+        try {
+            const cred = await createUserWithEmailAndPassword(
+                auth,
+                authEmail.trim(),
+                authPassword,
+            );
+            const displayName = playerNameDraft.trim().slice(0, 16) || 'Joueur';
+            await updateProfile(cred.user, { displayName });
+            setAuthMessage('Compte créé et connecté.');
+        } catch (error: any) {
+            setAuthMessage(error?.message ?? 'Erreur de création de compte.');
+        }
+    };
+
+    const handleLogin = async (event?: React.SyntheticEvent) => {
+        event?.preventDefault();
+        setAuthMessage('');
+        try {
+            await signInWithEmailAndPassword(
+                auth,
+                authEmail.trim(),
+                authPassword,
+            );
+            setAuthMessage('Connexion réussie.');
+        } catch (error: any) {
+            setAuthMessage(error?.message ?? 'Connexion impossible.');
+        }
+    };
+
+    const handlePasswordReset = async () => {
+        if (!authEmail.trim()) {
+            setAuthMessage('Saisis ton email pour réinitialiser.');
+            return;
+        }
+        try {
+            await sendPasswordResetEmail(auth, authEmail.trim());
+            setAuthMessage('Email de réinitialisation envoyé.');
+        } catch (error: any) {
+            setAuthMessage(error?.message ?? 'Erreur de réinitialisation.');
+        }
+    };
+
+    const handleLogout = async () => {
+        await signOut(auth);
+        setAuthMessage('Déconnecté.');
+    };
+
+    const handleCloudSave = useCallback(
+        async (silent = false) => {
+            if (!ensureConnected() || !currentUser) return;
+            try {
+                await setDoc(doc(db, 'cloudSaves', currentUser.uid), {
+                    userId: currentUser.uid,
+                    updatedAt: serverTimestamp(),
+                    state: game,
+                });
+                if (!silent) setCloudMessage('Sauvegarde cloud effectuée.');
+            } catch (error: any) {
+                if (!silent)
+                    setCloudMessage(
+                        error?.message ?? 'Erreur lors de la sauvegarde cloud.',
+                    );
+            }
+        },
+        [currentUser, ensureConnected, game],
+    );
+
+    const handleCloudLoad = useCallback(async () => {
+        if (!ensureConnected() || !currentUser) return;
+        const snap = await getDoc(doc(db, 'cloudSaves', currentUser.uid));
+        if (!snap.exists()) {
+            setCloudMessage('Aucune sauvegarde cloud disponible.');
+            return;
+        }
+        const data = snap.data() as { state?: GameState };
+        const cloudState = data?.state ? safeMergeGameState(data.state) : null;
+        if (cloudState) {
+            setGame(cloudState);
+            setCloudMessage('Sauvegarde cloud chargée.');
+        }
+    }, [currentUser, ensureConnected]);
+
+    useEffect(() => {
+        const unsubscribe = onAuthStateChanged(auth, async (user) => {
+            setCurrentUser(user);
+            if (!user) {
+                setGame({ ...defaultGameState });
+                setCloudMessage('Connecte-toi pour jouer.');
+                return;
+            }
+
+            const localState = loadGameState(user.uid);
+            const cloudDoc = await getDoc(doc(db, 'cloudSaves', user.uid));
+            let nextState = { ...localState };
+
+            if (cloudDoc.exists()) {
+                const data = cloudDoc.data() as { state?: GameState };
+                const cloudState = data?.state ? safeMergeGameState(data.state) : null;
+                if (cloudState && cloudState.totalCookies > localState.totalCookies) {
+                    const useCloud = window.confirm(
+                        'Une sauvegarde cloud plus récente existe. Charger le cloud ?',
+                    );
+                    if (useCloud) {
+                        nextState = cloudState;
+                        setCloudMessage('Sauvegarde cloud chargée.');
+                    } else {
+                        setCloudMessage('Cloud ignoré, cache local conservé.');
+                    }
+                }
+            }
+
+            const displayName = user.displayName?.slice(0, 16) ?? nextState.playerName;
+            setGame({ ...nextState, playerName: displayName });
+            setPlayerNameDraft(displayName ?? '');
+            setAuthEmail('');
+            setAuthPassword('');
+            setAuthMessage('Connecté.');
+        });
+
+        return () => unsubscribe();
+    }, []);
+
+    useEffect(() => {
+        if (currentUser) {
+            setIsAuthPanelOpen(false);
+        }
+    }, [currentUser]);
 
     const effectiveCps = useMemo(() => computeEffectiveCps(game), [game]);
     const cookiesPerClick = useMemo(
@@ -1142,8 +1344,26 @@ function App() {
 
     // Sauvegarde
     useEffect(() => {
-        persistGame(game);
-    }, [game]);
+        persistGame(game, currentUser?.uid ?? null);
+    }, [game, currentUser?.uid]);
+
+    useEffect(() => {
+        if (!currentUser) return;
+        const interval = window.setInterval(() => {
+            void handleCloudSave(true);
+        }, 180_000);
+
+        const beforeUnload = () => {
+            void handleCloudSave(true);
+        };
+
+        window.addEventListener('beforeunload', beforeUnload);
+
+        return () => {
+            window.clearInterval(interval);
+            window.removeEventListener('beforeunload', beforeUnload);
+        };
+    }, [currentUser, handleCloudSave]);
 
     // Thème global
     useEffect(() => {
@@ -1161,6 +1381,7 @@ function App() {
     // Sync meilleur gain local -> Firestore
     useEffect(() => {
         const best = game.gamblingStats.biggestWin;
+        if (!currentUser) return;
         if (best <= 0 || best === lastSyncedBestWin) return;
 
         const maxReasonable = Math.max(1e6, game.totalCookies * 10);
@@ -1177,8 +1398,9 @@ function App() {
             }
         }
 
-        void pushWinToGlobalLeaderboard(game.playerName, best);
+        void pushWinToGlobalLeaderboard(currentUser, game.playerName, best);
     }, [
+        currentUser,
         game.gamblingStats.biggestWin,
         game.playerName,
         game.totalCookies,
@@ -1209,6 +1431,7 @@ function App() {
     }, []);
 
     const handleCookieClick = () => {
+        if (!ensureConnected()) return;
         setGame((prev) => {
             const baseGain = computeCookiesPerClick(prev);
             let gain = baseGain;
@@ -1267,6 +1490,7 @@ function App() {
     );
 
     const handleBuyUpgrade = (upgrade: UpgradeDefinition) => {
+        if (!ensureConnected()) return;
         setGame((prev) => {
             if (prev.totalCookies < upgrade.unlockAt) return prev;
 
@@ -1318,18 +1542,23 @@ function App() {
     };
 
     const handleSavePlayerName = () => {
-        const trimmed = playerNameDraft.trim();
+        if (!ensureConnected()) return;
+        const trimmed = playerNameDraft.trim().slice(0, 16);
         const safeName = trimmed || 'Joueur';
         setGame((prev) => ({
             ...prev,
             playerName: safeName,
         }));
+        if (currentUser) {
+            void updateProfile(currentUser, { displayName: safeName });
+        }
         setIsPlayerModalOpen(false);
     };
 
     const currentWheelMaxBet = Math.max(0, Math.floor(game.cookies));
 
     const handleWheelSpin = () => {
+        if (!ensureConnected()) return;
         if (isWheelSpinning) return;
         if (currentWheelMaxBet < MIN_WHEEL_BET) return;
 
@@ -1449,6 +1678,7 @@ function App() {
     };
 
     const handleOpenCase = (caseDef: CaseDefinition) => {
+        if (!ensureConnected()) return;
         if (openingCaseId) return;
         if (game.cookies < caseDef.cost) return;
 
@@ -1562,6 +1792,7 @@ function App() {
     };
 
     const handleHighRoll = (allIn: boolean) => {
+        if (!ensureConnected()) return;
         let highRollResult: LastHighRollResult | null = null;
 
         setGame((prev) => {
@@ -1682,6 +1913,15 @@ function App() {
                 </div>
 
                 <div className="app-actions">
+                    <button
+                        type="button"
+                        className="ghost-button auth-toggle"
+                        onClick={() => setIsAuthPanelOpen(true)}
+                    >
+                        {currentUser
+                            ? `👤 ${game.playerName || 'Profil'}`
+                            : '🔐 Connexion / Inscription'}
+                    </button>
                     <div className="player-chip">
                         <span className="player-chip-label">Joueur</span>
                         <span className="player-chip-name">
@@ -1718,6 +1958,12 @@ function App() {
                 </div>
             </header>
 
+            {isLocked && (
+                <div className="lock-banner">
+                    🔒 {lockMessage}
+                </div>
+            )}
+
             <main className="app-main">
                 {/* ZONE HAUTE : cookie à gauche, carte info à droite */}
                 <section className="top-layout">
@@ -1734,6 +1980,7 @@ function App() {
                                                 : ''
                                             }`}
                                         onClick={handleCookieClick}
+                                        disabled={isLocked}
                                     >
                                         <div className="cookie-ring">
                                             <div className="cookie-ring-inner">
@@ -1993,6 +2240,7 @@ function App() {
                                                                         )
                                                                     }
                                                                     disabled={
+                                                                        isLocked ||
                                                                         !affordable
                                                                     }
                                                                 >
@@ -2429,6 +2677,7 @@ function App() {
                                     className="primary-button"
                                     onClick={handleWheelSpin}
                                     disabled={
+                                        isLocked ||
                                         isWheelSpinning ||
                                         game.cookies < MIN_WHEEL_BET
                                     }
@@ -2472,6 +2721,7 @@ function App() {
                             <div className="cases-list">
                                 {CASE_DEFINITIONS.map((c) => {
                                     const disabled =
+                                        isLocked ||
                                         game.cookies < c.cost ||
                                         openingCaseId === c.id;
                                     const opening = openingCaseId === c.id;
@@ -2559,7 +2809,7 @@ function App() {
                                 <button
                                     type="button"
                                     className="secondary-button"
-                                    disabled={game.cookies < 1_000}
+                                    disabled={isLocked || game.cookies < 1_000}
                                     onClick={() => handleHighRoll(false)}
                                 >
                                     Mise forte
@@ -2567,7 +2817,7 @@ function App() {
                                 <button
                                     type="button"
                                     className="danger-button"
-                                    disabled={game.cookies < 1_000}
+                                    disabled={isLocked || game.cookies < 1_000}
                                     onClick={() => handleHighRoll(true)}
                                 >
                                     ALL-IN 💀
@@ -2649,6 +2899,136 @@ function App() {
                     </div>
                 </section>
             </main>
+
+            {!currentUser && !isAuthPanelOpen && (
+                <div className="auth-nudge">
+                    <div>
+                        <div className="auth-nudge__title">
+                            Connecte-toi pour jouer
+                        </div>
+                        <div className="auth-nudge__text">
+                            Tes clics, upgrades et paris nécessitent un compte
+                            gratuit.
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        className="primary-button auth-nudge__button"
+                        onClick={() => setIsAuthPanelOpen(true)}
+                    >
+                        Ouvrir
+                    </button>
+                </div>
+            )}
+
+            <div
+                className={`auth-widget ${
+                    isAuthPanelOpen ? 'auth-widget--open' : ''
+                }`}
+            >
+                <div className="auth-widget__header">
+                    <div>
+                        <div className="auth-widget__title">
+                            {currentUser
+                                ? 'Profil & sauvegarde cloud'
+                                : 'Connexion / inscription'}
+                        </div>
+                        <div className="auth-widget__subtitle">
+                            {currentUser
+                                ? 'Gère ton pseudo et ta sauvegarde sécurisée.'
+                                : 'Aucun jeu hors ligne : connecte-toi pour cliquer et jouer.'}
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        className="ghost-button auth-widget__close"
+                        onClick={() => setIsAuthPanelOpen(false)}
+                    >
+                        ✕
+                    </button>
+                </div>
+
+                <div className="auth-widget__body">
+                    <div className="auth-widget__inputs">
+                        <input
+                            className="auth-input"
+                            type="email"
+                            placeholder="Email"
+                            value={authEmail}
+                            onChange={(e) => setAuthEmail(e.target.value)}
+                        />
+                        <input
+                            className="auth-input"
+                            type="password"
+                            placeholder="Mot de passe"
+                            value={authPassword}
+                            onChange={(e) => setAuthPassword(e.target.value)}
+                        />
+                    </div>
+
+                    <div className="auth-widget__actions">
+                        <button
+                            type="button"
+                            className="primary-button"
+                            onClick={handleLogin}
+                            disabled={!authEmail || !authPassword}
+                        >
+                            Connexion
+                        </button>
+                        <button
+                            type="button"
+                            className="secondary-button"
+                            onClick={handleSignup}
+                            disabled={!authEmail || !authPassword}
+                        >
+                            Créer un compte
+                        </button>
+                        <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={handlePasswordReset}
+                            disabled={!authEmail}
+                        >
+                            Mot de passe oublié
+                        </button>
+                    </div>
+
+                    <div className="auth-widget__status">{authMessage}</div>
+
+                    {currentUser && (
+                        <>
+                            <div className="auth-widget__cloud">
+                                <button
+                                    type="button"
+                                    className="ghost-button"
+                                    onClick={() => handleCloudSave(false)}
+                                >
+                                    Sauvegarde cloud
+                                </button>
+                                <button
+                                    type="button"
+                                    className="ghost-button"
+                                    onClick={handleCloudLoad}
+                                >
+                                    Charger depuis le cloud
+                                </button>
+                                <button
+                                    type="button"
+                                    className="ghost-button ghost-button--danger"
+                                    onClick={handleLogout}
+                                >
+                                    Se déconnecter
+                                </button>
+                            </div>
+                            {cloudMessage && (
+                                <div className="auth-widget__status">
+                                    {cloudMessage}
+                                </div>
+                            )}
+                        </>
+                    )}
+                </div>
+            </div>
 
             {/* Modal pseudo joueur */}
             {isPlayerModalOpen && (
