@@ -1062,7 +1062,6 @@ function App() {
         game.playerName || '',
     );
 
-    const baseCps = useMemo(() => computeBaseCps(game), [game]);
     const effectiveCps = useMemo(() => computeEffectiveCps(game), [game]);
     const cookiesPerClick = useMemo(
         () => computeCookiesPerClick(game),
