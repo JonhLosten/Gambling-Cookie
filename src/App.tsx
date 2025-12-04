@@ -793,11 +793,7 @@ const ACHIEVEMENTS: Achievement[] = [
 const DEFAULT_PLAYER_NAME = 'Invité';
 
 const sanitizePlayerName = (rawName?: string | null): string => {
-    const cleaned = (rawName ?? '')
-        .replace(/[^\p{L}\p{N} _-]/gu, '')
-        .replace(/\s+/g, ' ')
-        .trim();
-    const trimmed = cleaned.slice(0, 16);
+    const trimmed = (rawName ?? '').trim().slice(0, 16);
     return trimmed || DEFAULT_PLAYER_NAME;
 };
 
@@ -966,6 +962,7 @@ function safeMergeGameState(rawState: unknown): GameState {
         playerName: sanitizePlayerName(
             parsed.playerName ?? defaultGameState.playerName,
         ),
+        playerName: (parsed.playerName ?? '').slice(0, 16),
         leaderboard: (parsed.leaderboard ?? []).slice(0, 50),
         totalClicks: clampNumber(parsed.totalClicks ?? 0, 1e9),
         totalUpgradesPurchased: clampNumber(
@@ -1066,6 +1063,7 @@ async function pushWinToGlobalLeaderboard(
     if (!user) return;
 
     const safeName = sanitizePlayerName(playerName);
+    const safeName = (playerName || 'Invité').trim().slice(0, 16);
     const safeScore = Math.max(0, Math.round(amount));
 
     if (!safeScore) return;
@@ -1135,6 +1133,7 @@ function App() {
 
     const [playerNameDraft, setPlayerNameDraft] = useState(
         sanitizePlayerName(game.playerName),
+        game.playerName || DEFAULT_PLAYER_NAME,
     );
     const [isAuthPanelOpen, setIsAuthPanelOpen] = useState(false);
     const [isAuthNudgeDismissed, setIsAuthNudgeDismissed] = useState(false);
@@ -1220,6 +1219,150 @@ function App() {
         },
         [currentUser, ensureConnected, game],
     );
+    const [isAuthPanelOpen, setIsAuthPanelOpen] = useState(false);
+
+    const isLocked = !currentUser;
+
+    const ensureConnected = useCallback(() => {
+        if (!currentUser) {
+            setLockMessage('Connecte-toi pour jouer.');
+            setAuthMessage('Connexion requise pour jouer.');
+            setIsAuthPanelOpen(true);
+            return false;
+        }
+        return true;
+    }, [currentUser]);
+
+    const handleSignup = async (event?: React.SyntheticEvent) => {
+        event?.preventDefault();
+        setAuthMessage('');
+        try {
+            const cred = await createUserWithEmailAndPassword(
+                auth,
+                authEmail.trim(),
+                authPassword,
+            );
+            const displayName = playerNameDraft.trim().slice(0, 16) || 'Joueur';
+            await updateProfile(cred.user, { displayName });
+            setAuthMessage('Compte créé et connecté.');
+        } catch (error: any) {
+            setAuthMessage(error?.message ?? 'Erreur de création de compte.');
+        }
+    };
+
+    const handleLogin = async (event?: React.SyntheticEvent) => {
+        event?.preventDefault();
+        setAuthMessage('');
+        try {
+            await signInWithEmailAndPassword(
+                auth,
+                authEmail.trim(),
+                authPassword,
+            );
+            setAuthMessage('Connexion réussie.');
+        } catch (error: any) {
+            setAuthMessage(error?.message ?? 'Connexion impossible.');
+        }
+    };
+
+    const handlePasswordReset = async () => {
+        if (!authEmail.trim()) {
+            setAuthMessage('Saisis ton email pour réinitialiser.');
+            return;
+        }
+        try {
+            await sendPasswordResetEmail(auth, authEmail.trim());
+            setAuthMessage('Email de réinitialisation envoyé.');
+        } catch (error: any) {
+            setAuthMessage(error?.message ?? 'Erreur de réinitialisation.');
+        }
+    };
+
+    const handleLogout = async () => {
+        await signOut(auth);
+        setAuthMessage('Déconnecté.');
+    };
+
+    const handleCloudSave = useCallback(
+        async (silent = false) => {
+            if (!ensureConnected() || !currentUser) return;
+            try {
+                await setDoc(doc(db, 'cloudSaves', currentUser.uid), {
+                    userId: currentUser.uid,
+                    updatedAt: serverTimestamp(),
+                    state: game,
+                });
+                if (!silent) setCloudMessage('Sauvegarde cloud effectuée.');
+            } catch (error: any) {
+                if (!silent)
+                    setCloudMessage(
+                        error?.message ?? 'Erreur lors de la sauvegarde cloud.',
+                    );
+            }
+        },
+        [currentUser, ensureConnected, game],
+    );
+
+    const handleCloudLoad = useCallback(async () => {
+        if (!ensureConnected() || !currentUser) return;
+        const snap = await getDoc(doc(db, 'cloudSaves', currentUser.uid));
+        if (!snap.exists()) {
+            setCloudMessage('Aucune sauvegarde cloud disponible.');
+            return;
+        }
+        const data = snap.data() as { state?: GameState };
+        const cloudState = data?.state ? safeMergeGameState(data.state) : null;
+        if (cloudState) {
+            setGame(cloudState);
+            setCloudMessage('Sauvegarde cloud chargée.');
+        }
+    }, [currentUser, ensureConnected]);
+
+    useEffect(() => {
+        const unsubscribe = onAuthStateChanged(auth, async (user) => {
+            setCurrentUser(user);
+            if (!user) {
+                setGame({ ...defaultGameState });
+                setCloudMessage('Connecte-toi pour jouer.');
+                return;
+            }
+
+            const localState = loadGameState(user.uid);
+            const cloudDoc = await getDoc(doc(db, 'cloudSaves', user.uid));
+            let nextState = { ...localState };
+
+            if (cloudDoc.exists()) {
+                const data = cloudDoc.data() as { state?: GameState };
+                const cloudState = data?.state ? safeMergeGameState(data.state) : null;
+                if (cloudState && cloudState.totalCookies > localState.totalCookies) {
+                    const useCloud = window.confirm(
+                        'Une sauvegarde cloud plus récente existe. Charger le cloud ?',
+                    );
+                    if (useCloud) {
+                        nextState = cloudState;
+                        setCloudMessage('Sauvegarde cloud chargée.');
+                    } else {
+                        setCloudMessage('Cloud ignoré, cache local conservé.');
+                    }
+                }
+            }
+
+            const displayName = user.displayName?.slice(0, 16) ?? nextState.playerName;
+            setGame({ ...nextState, playerName: displayName });
+            setPlayerNameDraft(displayName ?? '');
+            setAuthEmail('');
+            setAuthPassword('');
+            setAuthMessage('Connecté.');
+        });
+
+        return () => unsubscribe();
+    }, []);
+
+    useEffect(() => {
+        if (currentUser) {
+            setIsAuthPanelOpen(false);
+        }
+    }, [currentUser]);
 
     const handleCloudLoad = useCallback(async () => {
         if (!ensureConnected() || !currentUser) return;
@@ -1394,6 +1537,7 @@ function App() {
 
     useEffect(() => {
         setPlayerNameDraft(sanitizePlayerName(game.playerName));
+        setPlayerNameDraft(game.playerName || DEFAULT_PLAYER_NAME);
     }, [game.playerName]);
 
     // Sync meilleur gain local -> Firestore
@@ -1562,6 +1706,8 @@ function App() {
     const handleSavePlayerName = () => {
         if (!ensureConnected()) return;
         const safeName = sanitizePlayerName(playerNameDraft);
+        const trimmed = playerNameDraft.trim().slice(0, 16);
+        const safeName = trimmed || 'Joueur';
         setGame((prev) => ({
             ...prev,
             playerName: safeName,
@@ -1569,6 +1715,7 @@ function App() {
         if (currentUser) {
             void updateProfile(currentUser, { displayName: safeName });
         }
+        setIsPlayerModalOpen(false);
     };
 
     const currentWheelMaxBet = Math.max(0, Math.floor(game.cookies));
@@ -2928,6 +3075,8 @@ function App() {
                     >
                         ✕
                     </button>
+            {!currentUser && !isAuthPanelOpen && (
+                <div className="auth-nudge">
                     <div>
                         <div className="auth-nudge__title">
                             Connecte-toi pour jouer
@@ -2935,6 +3084,153 @@ function App() {
                         <div className="auth-nudge__text">
                             Tes clics, upgrades et paris nécessitent un compte
                             gratuit.
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        className="primary-button auth-nudge__button"
+                        onClick={() => setIsAuthPanelOpen(true)}
+                    >
+                        Ouvrir
+                    </button>
+                </div>
+            )}
+
+            <div
+                className={`auth-widget ${
+                    isAuthPanelOpen ? 'auth-widget--open' : ''
+                }`}
+            >
+                <div className="auth-widget__header">
+                    <div>
+                        <div className="auth-widget__title">
+                            {currentUser
+                                ? 'Profil & sauvegarde cloud'
+                                : 'Connexion / inscription'}
+                        </div>
+                        <div className="auth-widget__subtitle">
+                            {currentUser
+                                ? 'Gère ton pseudo et ta sauvegarde sécurisée.'
+                                : 'Aucun jeu hors ligne : connecte-toi pour cliquer et jouer.'}
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        className="ghost-button auth-widget__close"
+                        onClick={() => setIsAuthPanelOpen(false)}
+                    >
+                        ✕
+                    </button>
+                </div>
+
+                <div className="auth-widget__body">
+                    <div className="auth-widget__inputs">
+                        <input
+                            className="auth-input"
+                            type="email"
+                            placeholder="Email"
+                            value={authEmail}
+                            onChange={(e) => setAuthEmail(e.target.value)}
+                        />
+                        <input
+                            className="auth-input"
+                            type="password"
+                            placeholder="Mot de passe"
+                            value={authPassword}
+                            onChange={(e) => setAuthPassword(e.target.value)}
+                        />
+                    </div>
+
+                    <div className="auth-widget__actions">
+                        <button
+                            type="button"
+                            className="primary-button"
+                            onClick={handleLogin}
+                            disabled={!authEmail || !authPassword}
+                        >
+                            Connexion
+                        </button>
+                        <button
+                            type="button"
+                            className="secondary-button"
+                            onClick={handleSignup}
+                            disabled={!authEmail || !authPassword}
+                        >
+                            Créer un compte
+                        </button>
+                        <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={handlePasswordReset}
+                            disabled={!authEmail}
+                        >
+                            Mot de passe oublié
+                        </button>
+                    </div>
+
+                    <div className="auth-widget__status">{authMessage}</div>
+
+                    {currentUser && (
+                        <>
+                            <div className="auth-widget__cloud">
+                                <button
+                                    type="button"
+                                    className="ghost-button"
+                                    onClick={() => handleCloudSave(false)}
+                                >
+                                    Sauvegarde cloud
+                                </button>
+                                <button
+                                    type="button"
+                                    className="ghost-button"
+                                    onClick={handleCloudLoad}
+                                >
+                                    Charger depuis le cloud
+                                </button>
+                                <button
+                                    type="button"
+                                    className="ghost-button ghost-button--danger"
+                                    onClick={handleLogout}
+                                >
+                                    Se déconnecter
+                                </button>
+                            </div>
+                            {cloudMessage && (
+                                <div className="auth-widget__status">
+                                    {cloudMessage}
+                                </div>
+                            )}
+                        </>
+                    )}
+                </div>
+            </div>
+
+            {/* Modal pseudo joueur */}
+            {isPlayerModalOpen && (
+                <div className="modal-backdrop">
+                    <div className="modal-card">
+                        <h2>Choisis ton pseudo</h2>
+                        <p>
+                            Il sera utilisé pour le classement local et global.
+                            Tu pourras le modifier plus tard.
+                        </p>
+                        <input
+                            type="text"
+                            maxLength={16}
+                            className="modal-input"
+                            value={playerNameDraft}
+                            onChange={(
+                                e: React.ChangeEvent<HTMLInputElement>,
+                            ) => setPlayerNameDraft(e.target.value)}
+                        />
+                        <div className="modal-actions">
+                            <button
+                                type="button"
+                                className="primary-button"
+                                onClick={handleSavePlayerName}
+                            >
+                                Valider
+                            </button>
                         </div>
                     </div>
                     <button
