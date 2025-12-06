@@ -31,6 +31,7 @@ import {
     signOut,
     updateProfile,
 } from 'firebase/auth';
+import { FirebaseError } from 'firebase/app';
 import './App.css';
 import './ui-tweaks.css';
 
@@ -1111,6 +1112,13 @@ function App() {
         return true;
     }, [currentUser]);
 
+    const formatAuthError = (error: any) => {
+        if (error instanceof FirebaseError && error.code === 'auth/configuration-not-found') {
+            return 'Configuration Firebase introuvable. Vérifie les identifiants Firebase dans les variables d’environnement.';
+        }
+        return error?.message ?? 'Erreur de connexion.';
+    };
+
     useEffect(() => {
         ensureSessionId();
     }, []);
@@ -1124,7 +1132,7 @@ function App() {
             await updateProfile(cred.user, { displayName });
             setAuthMessage('Compte créé et connecté.');
         } catch (error: any) {
-            setAuthMessage(error?.message ?? 'Erreur de création de compte.');
+            setAuthMessage(formatAuthError(error));
         }
     };
 
@@ -1135,7 +1143,7 @@ function App() {
             await signInWithEmailAndPassword(auth, authEmail.trim(), authPassword);
             setAuthMessage('Connexion réussie.');
         } catch (error: any) {
-            setAuthMessage(error?.message ?? 'Connexion impossible.');
+            setAuthMessage(formatAuthError(error));
         }
     };
 
@@ -1148,7 +1156,7 @@ function App() {
             await sendPasswordResetEmail(auth, authEmail.trim());
             setAuthMessage('Email de réinitialisation envoyé.');
         } catch (error: any) {
-            setAuthMessage(error?.message ?? 'Erreur de réinitialisation.');
+            setAuthMessage(formatAuthError(error));
         }
     };
 
@@ -1585,9 +1593,11 @@ function App() {
             };
         });
 
-        if (spinResult) {
-            setLastWheelResult(spinResult);
-            setOverlay({ kind: 'wheel', result: spinResult });
+        const result = spinResult as LastWheelResult | null;
+
+        if (result) {
+            setLastWheelResult(result);
+            setOverlay({ kind: 'wheel', result });
 
             void sendGameplayLog({
                 type: 'wheel_spin',
@@ -1596,10 +1606,10 @@ function App() {
                 sessionId: getSessionId(),
                 playerName: game.playerName ?? null,
                 payload: {
-                    bet: spinResult.spent,
-                    delta: spinResult.delta,
-                    label: spinResult.label,
-                    isJackpot: spinResult.isJackpot,
+                    bet: result.spent,
+                    delta: result.delta,
+                    label: result.label,
+                    isJackpot: result.isJackpot,
                 },
             });
         }
@@ -1694,9 +1704,11 @@ function App() {
                 };
             });
 
-            if (caseResult) {
-                setLastCaseResult(caseResult);
-                setOverlay({ kind: 'case', result: caseResult });
+            const result = caseResult as LastCaseResult | null;
+
+            if (result) {
+                setLastCaseResult(result);
+                setOverlay({ kind: 'case', result });
 
                 void sendGameplayLog({
                     type: 'case_open',
@@ -1705,11 +1717,11 @@ function App() {
                     sessionId: getSessionId(),
                     playerName: game.playerName ?? null,
                     payload: {
-                        bet: caseResult.spent,
-                        reward: caseResult.reward,
-                        caseId: caseResult.caseId,
-                        isJackpot: caseResult.isJackpot,
-                        isLoss: caseResult.isLoss,
+                        bet: result.spent,
+                        reward: result.reward,
+                        caseId: result.caseId,
+                        isJackpot: result.isJackpot,
+                        isLoss: result.isLoss,
                     },
                 });
             }
@@ -1796,9 +1808,11 @@ function App() {
             };
         });
 
-        if (highRollResult) {
-            setLastHighRoll(highRollResult);
-            setOverlay({ kind: 'highroll', result: highRollResult });
+        const result = highRollResult as LastHighRollResult | null;
+
+        if (result) {
+            setLastHighRoll(result);
+            setOverlay({ kind: 'highroll', result });
 
             void sendGameplayLog({
                 type: 'high_roll',
@@ -1807,10 +1821,10 @@ function App() {
                 sessionId: getSessionId(),
                 playerName: game.playerName ?? null,
                 payload: {
-                    bet: highRollResult.bet,
-                    delta: highRollResult.delta,
-                    allIn: highRollResult.allIn,
-                    outcome: highRollResult.outcome,
+                    bet: result.bet,
+                    delta: result.delta,
+                    allIn: result.allIn,
+                    outcome: result.outcome,
                 },
             });
         }
