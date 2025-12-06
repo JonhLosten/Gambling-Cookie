@@ -31,6 +31,7 @@ import {
     signOut,
     updateProfile,
 } from 'firebase/auth';
+import { FirebaseError } from 'firebase/app';
 import './App.css';
 import './ui-tweaks.css';
 
@@ -1111,6 +1112,13 @@ function App() {
         return true;
     }, [currentUser]);
 
+    const formatAuthError = (error: any) => {
+        if (error instanceof FirebaseError && error.code === 'auth/configuration-not-found') {
+            return 'Configuration Firebase introuvable. Vérifie les identifiants Firebase dans les variables d’environnement.';
+        }
+        return error?.message ?? 'Erreur de connexion.';
+    };
+
     useEffect(() => {
         ensureSessionId();
     }, []);
@@ -1124,7 +1132,7 @@ function App() {
             await updateProfile(cred.user, { displayName });
             setAuthMessage('Compte créé et connecté.');
         } catch (error: any) {
-            setAuthMessage(error?.message ?? 'Erreur de création de compte.');
+            setAuthMessage(formatAuthError(error));
         }
     };
 
@@ -1135,7 +1143,7 @@ function App() {
             await signInWithEmailAndPassword(auth, authEmail.trim(), authPassword);
             setAuthMessage('Connexion réussie.');
         } catch (error: any) {
-            setAuthMessage(error?.message ?? 'Connexion impossible.');
+            setAuthMessage(formatAuthError(error));
         }
     };
 
@@ -1148,7 +1156,7 @@ function App() {
             await sendPasswordResetEmail(auth, authEmail.trim());
             setAuthMessage('Email de réinitialisation envoyé.');
         } catch (error: any) {
-            setAuthMessage(error?.message ?? 'Erreur de réinitialisation.');
+            setAuthMessage(formatAuthError(error));
         }
     };
 
