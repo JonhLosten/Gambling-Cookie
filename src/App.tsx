@@ -1585,11 +1585,9 @@ function App() {
             };
         });
 
-        const wheelResult = spinResult as LastWheelResult | null;
-
-        if (wheelResult) {
-            setLastWheelResult(wheelResult);
-            setOverlay({ kind: 'wheel', result: wheelResult });
+        if (spinResult) {
+            setLastWheelResult(spinResult);
+            setOverlay({ kind: 'wheel', result: spinResult });
 
             void sendGameplayLog({
                 type: 'wheel_spin',
@@ -1598,10 +1596,10 @@ function App() {
                 sessionId: getSessionId(),
                 playerName: game.playerName ?? null,
                 payload: {
-                    bet: wheelResult.spent,
-                    delta: wheelResult.delta,
-                    label: wheelResult.label,
-                    isJackpot: wheelResult.isJackpot,
+                    bet: spinResult.spent,
+                    delta: spinResult.delta,
+                    label: spinResult.label,
+                    isJackpot: spinResult.isJackpot,
                 },
             });
         }
@@ -1696,11 +1694,9 @@ function App() {
                 };
             });
 
-            const resolvedCaseResult = caseResult as LastCaseResult | null;
-
-            if (resolvedCaseResult) {
-                setLastCaseResult(resolvedCaseResult);
-                setOverlay({ kind: 'case', result: resolvedCaseResult });
+            if (caseResult) {
+                setLastCaseResult(caseResult);
+                setOverlay({ kind: 'case', result: caseResult });
 
                 void sendGameplayLog({
                     type: 'case_open',
@@ -1709,11 +1705,11 @@ function App() {
                     sessionId: getSessionId(),
                     playerName: game.playerName ?? null,
                     payload: {
-                        bet: resolvedCaseResult.spent,
-                        reward: resolvedCaseResult.reward,
-                        caseId: resolvedCaseResult.caseId,
-                        isJackpot: resolvedCaseResult.isJackpot,
-                        isLoss: resolvedCaseResult.isLoss,
+                        bet: caseResult.spent,
+                        reward: caseResult.reward,
+                        caseId: caseResult.caseId,
+                        isJackpot: caseResult.isJackpot,
+                        isLoss: caseResult.isLoss,
                     },
                 });
             }
@@ -1800,11 +1796,9 @@ function App() {
             };
         });
 
-        const resolvedHighRoll = highRollResult as LastHighRollResult | null;
-
-        if (resolvedHighRoll) {
-            setLastHighRoll(resolvedHighRoll);
-            setOverlay({ kind: 'highroll', result: resolvedHighRoll });
+        if (highRollResult) {
+            setLastHighRoll(highRollResult);
+            setOverlay({ kind: 'highroll', result: highRollResult });
 
             void sendGameplayLog({
                 type: 'high_roll',
@@ -1813,10 +1807,10 @@ function App() {
                 sessionId: getSessionId(),
                 playerName: game.playerName ?? null,
                 payload: {
-                    bet: resolvedHighRoll.bet,
-                    delta: resolvedHighRoll.delta,
-                    allIn: resolvedHighRoll.allIn,
-                    outcome: resolvedHighRoll.outcome,
+                    bet: highRollResult.bet,
+                    delta: highRollResult.delta,
+                    allIn: highRollResult.allIn,
+                    outcome: highRollResult.outcome,
                 },
             });
         }
