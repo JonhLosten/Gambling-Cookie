@@ -1,0 +1,201 @@
+.top-layout {
+    align-items: stretch;
+    gap: 12px;
+}
+
+.top-layout-left .cookie-panel {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 8px;
+    max-height: 560px;
+}
+
+.cookie-card {
+    max-height: 540px;
+}
+
+.top-layout-right .info-panel {
+    max-height: 560px;
+    overflow: hidden;
+}
+
+.info-panel .info-content,
+.info-leaderboard,
+.info-upgrades,
+.info-achievements {
+    max-height: 500px;
+    overflow-y: auto;
+    padding-right: 8px;
+}
+
+.info-top3 {
+    gap: 8px;
+}
+
+.info-top3-heading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 0;
+}
+
+.info-top3-title,
+.info-top3-subtitle {
+    margin: 0;
+}
+
+.top3-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+}
+
+.top3-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    min-width: 140px;
+}
+
+.top3-name {
+    display: inline-block;
+    background: linear-gradient(120deg, rgba(255, 255, 255, 0.4), rgba(255, 255, 255, 0));
+    background-size: 200% 200%;
+    animation: shine 2.4s ease-in-out infinite;
+    padding: 1px 4px;
+    border-radius: 4px;
+}
+
+.top3-item--1 .top3-name,
+.podium-column--gold .podium-name {
+    color: #f5d36c;
+    text-shadow: 0 0 10px rgba(245, 211, 108, 0.5);
+}
+
+.top3-item--2 .top3-name,
+.podium-column--silver .podium-name {
+    color: #c7d2e5;
+    text-shadow: 0 0 8px rgba(199, 210, 229, 0.4);
+}
+
+.top3-item--3 .top3-name,
+.podium-column--bronze .podium-name {
+    color: #e7a56a;
+    text-shadow: 0 0 8px rgba(231, 165, 106, 0.4);
+}
+
+.podium-name {
+    display: inline-block;
+    background: linear-gradient(120deg, rgba(255, 255, 255, 0.4), rgba(255, 255, 255, 0));
+    background-size: 200% 200%;
+    animation: shine 2.4s ease-in-out infinite;
+    padding: 2px 6px;
+    border-radius: 6px;
+}
+
+@keyframes shine {
+    0% {
+        background-position: 200% 0;
+    }
+    100% {
+        background-position: -200% 0;
+    }
+}
+
+.info-tabs {
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.upgrade-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.upgrade-tab {
+    flex: 1;
+    min-width: 140px;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+}
+
+.upgrade-tab-description {
+    display: none;
+}
+
+.shop-list-wrapper {
+    max-height: 360px;
+    overflow-y: auto;
+    padding-right: 6px;
+}
+
+.info-upgrades > p,
+.info-achievements > p {
+    margin: 0 0 6px;
+}
+
+.info-leaderboard .leaderboard-scroll {
+    max-height: 380px;
+    overflow-y: auto;
+    padding-right: 6px;
+}
+
+.auth-widget__anonymous {
+    margin-top: 10px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    padding-top: 10px;
+}
+
+.auth-widget__hint {
+    margin: 6px 0 0;
+    color: rgba(255, 255, 255, 0.8);
+    font-size: 0.9rem;
+}
+
+.lock-banner {
+    align-items: center;
+    gap: 8px;
+}
+
+.info-top3,
+.info-upgrades,
+.info-achievements,
+.info-leaderboard,
+.casino-grid {
+    scrollbar-width: thin;
+}
+
+.info-top3::-webkit-scrollbar,
+.info-upgrades::-webkit-scrollbar,
+.info-achievements::-webkit-scrollbar,
+.info-leaderboard::-webkit-scrollbar,
+.casino-grid::-webkit-scrollbar,
+.shop-list-wrapper::-webkit-scrollbar {
+    width: 8px;
+}
+
+.info-top3::-webkit-scrollbar-thumb,
+.info-upgrades::-webkit-scrollbar-thumb,
+.info-achievements::-webkit-scrollbar-thumb,
+.info-leaderboard::-webkit-scrollbar-thumb,
+.casino-grid::-webkit-scrollbar-thumb,
+.shop-list-wrapper::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+}
+
+.info-top3::-webkit-scrollbar-track,
+.info-upgrades::-webkit-scrollbar-track,
+.info-achievements::-webkit-scrollbar-track,
+.info-leaderboard::-webkit-scrollbar-track,
+.casino-grid::-webkit-scrollbar-track,
+.shop-list-wrapper::-webkit-scrollbar-track {
+    background: transparent;
+}

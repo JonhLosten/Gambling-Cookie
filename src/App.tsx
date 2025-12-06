@@ -20,6 +20,8 @@ import {
     auth,
     db,
 } from './firebase';
+import { ensureSessionId, getSessionId } from './lib/session';
+import { sendGameplayLog } from './lib/logging';
 import {
     User,
     onAuthStateChanged,
@@ -30,6 +32,7 @@ import {
     updateProfile,
 } from 'firebase/auth';
 import './App.css';
+import './ui-tweaks.css';
 
 type Theme = 'light' | 'dark';
 
@@ -1086,7 +1089,7 @@ function App() {
     const [lastHighRoll, setLastHighRoll] = useState<LastHighRollResult | null>(null);
     const [wheelBet, setWheelBet] = useState<number>(500);
     const [overlay, setOverlay] = useState<OverlayState>(null);
-    const [lockMessage, setLockMessage] = useState('Connecte-toi pour jouer.');
+    const [lockMessage, setLockMessage] = useState('💾 Connecte-toi pour sauvegarder.');
 
     const [selectedUpgradeCategory, setSelectedUpgradeCategory] = useState<UpgradeCategoryId>('auto');
 
@@ -1094,20 +1097,23 @@ function App() {
 
     const [playerNameDraft, setPlayerNameDraft] = useState(sanitizePlayerName(game.playerName));
     const [isAuthPanelOpen, setIsAuthPanelOpen] = useState(false);
-    const [isAuthNudgeDismissed, setIsAuthNudgeDismissed] = useState(false);
     const [isPlayerModalOpen, setIsPlayerModalOpen] = useState(false);
 
-    const isLocked = !currentUser;
+    const isAuthenticated = !!currentUser;
 
     const ensureConnected = useCallback(() => {
         if (!currentUser) {
-            setLockMessage('Connecte-toi pour jouer.');
-            setAuthMessage('Connexion requise pour jouer.');
+            setLockMessage('💾 Connecte-toi pour sauvegarder.');
+            setAuthMessage('Connexion requise pour sauvegarder dans le cloud et apparaître au classement.');
             setIsAuthPanelOpen(true);
             return false;
         }
         return true;
     }, [currentUser]);
+
+    useEffect(() => {
+        ensureSessionId();
+    }, []);
 
     const handleSignup = async (event?: React.SyntheticEvent) => {
         event?.preventDefault();
@@ -1188,8 +1194,7 @@ function App() {
             setCurrentUser(user);
             if (!user) {
                 setGame({ ...defaultGameState });
-                setCloudMessage('Connecte-toi pour jouer.');
-                setIsAuthNudgeDismissed(false);
+                setCloudMessage('💾 Connecte-toi pour sauvegarder.');
                 return;
             }
 
@@ -1244,25 +1249,6 @@ function App() {
     ]
         .filter(Boolean)
         .join(' ');
-
-    const todayKey = useMemo(() => new Date().toISOString().slice(0, 10), []);
-
-    const todayTopWins = useMemo(
-        () =>
-            [...game.leaderboard]
-                .filter((entry) => entry.date.startsWith(todayKey))
-                .sort((a, b) => b.amount - a.amount)
-                .slice(0, 5),
-        [game.leaderboard, todayKey],
-    );
-
-    const allTimeTopWins = useMemo(
-        () =>
-            [...game.leaderboard]
-                .sort((a, b) => b.amount - a.amount)
-                .slice(0, 10),
-        [game.leaderboard],
-    );
 
     const globalTop3 = useMemo(() => globalLeaderboard.slice(0, 3), [globalLeaderboard]);
     const globalRest = useMemo(() => globalLeaderboard.slice(3), [globalLeaderboard]);
@@ -1370,7 +1356,7 @@ function App() {
     }, []);
 
     const handleCookieClick = () => {
-        if (!ensureConnected()) return;
+        const beforeCookies = game.cookies;
         setGame((prev) => {
             const baseGain = computeCookiesPerClick(prev);
             let gain = baseGain;
@@ -1397,6 +1383,15 @@ function App() {
 
         setIsCookiePressed(true);
         window.setTimeout(() => setIsCookiePressed(false), 120);
+
+        void sendGameplayLog({
+            type: 'click',
+            ts: Date.now(),
+            userId: currentUser?.uid ?? null,
+            sessionId: getSessionId(),
+            playerName: game.playerName ?? null,
+            payload: { cookiesBefore: beforeCookies },
+        });
     };
 
     const applyFrenzyBuffIfNeeded = useCallback(
@@ -1423,7 +1418,10 @@ function App() {
     );
 
     const handleBuyUpgrade = (upgrade: UpgradeDefinition) => {
-        if (!ensureConnected()) return;
+        let purchased = false;
+        let nextQty = 0;
+        let spent = 0;
+
         setGame((prev) => {
             if (prev.totalCookies < upgrade.unlockAt) return prev;
 
@@ -1443,9 +1441,23 @@ function App() {
             };
 
             next = applyFrenzyBuffIfNeeded(upgrade, next);
+            purchased = true;
+            nextQty = quantity + 1;
+            spent = cost;
 
             return next;
         });
+
+        if (purchased) {
+            void sendGameplayLog({
+                type: 'upgrade_purchase',
+                ts: Date.now(),
+                userId: currentUser?.uid ?? null,
+                sessionId: getSessionId(),
+                playerName: game.playerName ?? null,
+                payload: { upgradeId: upgrade.id, newQty: nextQty, cost: spent },
+            });
+        }
     };
 
     const handleReset = () => {
@@ -1471,7 +1483,6 @@ function App() {
     };
 
     const handleSavePlayerName = () => {
-        if (!ensureConnected()) return;
         const safeName = sanitizePlayerName(playerNameDraft);
         setGame((prev) => ({
             ...prev,
@@ -1486,7 +1497,6 @@ function App() {
     const currentWheelMaxBet = Math.max(0, Math.floor(game.cookies));
 
     const handleWheelSpin = () => {
-        if (!ensureConnected()) return;
         if (isWheelSpinning) return;
         if (currentWheelMaxBet < MIN_WHEEL_BET) return;
 
@@ -1575,16 +1585,31 @@ function App() {
             };
         });
 
-        if (spinResult) {
-            setLastWheelResult(spinResult);
-            setOverlay({ kind: 'wheel', result: spinResult });
+        const wheelResult = spinResult as LastWheelResult | null;
+
+        if (wheelResult) {
+            setLastWheelResult(wheelResult);
+            setOverlay({ kind: 'wheel', result: wheelResult });
+
+            void sendGameplayLog({
+                type: 'wheel_spin',
+                ts: Date.now(),
+                userId: currentUser?.uid ?? null,
+                sessionId: getSessionId(),
+                playerName: game.playerName ?? null,
+                payload: {
+                    bet: wheelResult.spent,
+                    delta: wheelResult.delta,
+                    label: wheelResult.label,
+                    isJackpot: wheelResult.isJackpot,
+                },
+            });
         }
 
         window.setTimeout(() => setIsWheelSpinning(false), 900);
     };
 
     const handleOpenCase = (caseDef: CaseDefinition) => {
-        if (!ensureConnected()) return;
         if (openingCaseId) return;
         if (game.cookies < caseDef.cost) return;
 
@@ -1671,9 +1696,26 @@ function App() {
                 };
             });
 
-            if (caseResult) {
-                setLastCaseResult(caseResult);
-                setOverlay({ kind: 'case', result: caseResult });
+            const resolvedCaseResult = caseResult as LastCaseResult | null;
+
+            if (resolvedCaseResult) {
+                setLastCaseResult(resolvedCaseResult);
+                setOverlay({ kind: 'case', result: resolvedCaseResult });
+
+                void sendGameplayLog({
+                    type: 'case_open',
+                    ts: Date.now(),
+                    userId: currentUser?.uid ?? null,
+                    sessionId: getSessionId(),
+                    playerName: game.playerName ?? null,
+                    payload: {
+                        bet: resolvedCaseResult.spent,
+                        reward: resolvedCaseResult.reward,
+                        caseId: resolvedCaseResult.caseId,
+                        isJackpot: resolvedCaseResult.isJackpot,
+                        isLoss: resolvedCaseResult.isLoss,
+                    },
+                });
             }
 
             setOpeningCaseId(null);
@@ -1681,7 +1723,6 @@ function App() {
     };
 
     const handleHighRoll = (allIn: boolean) => {
-        if (!ensureConnected()) return;
         let highRollResult: LastHighRollResult | null = null;
 
         setGame((prev) => {
@@ -1759,9 +1800,25 @@ function App() {
             };
         });
 
-        if (highRollResult) {
-            setLastHighRoll(highRollResult);
-            setOverlay({ kind: 'highroll', result: highRollResult });
+        const resolvedHighRoll = highRollResult as LastHighRollResult | null;
+
+        if (resolvedHighRoll) {
+            setLastHighRoll(resolvedHighRoll);
+            setOverlay({ kind: 'highroll', result: resolvedHighRoll });
+
+            void sendGameplayLog({
+                type: 'high_roll',
+                ts: Date.now(),
+                userId: currentUser?.uid ?? null,
+                sessionId: getSessionId(),
+                playerName: game.playerName ?? null,
+                payload: {
+                    bet: resolvedHighRoll.bet,
+                    delta: resolvedHighRoll.delta,
+                    allIn: resolvedHighRoll.allIn,
+                    outcome: resolvedHighRoll.outcome,
+                },
+            });
         }
     };
 
@@ -1821,7 +1878,7 @@ function App() {
                 </div>
             </header>
 
-            {isLocked && <div className="lock-banner">🔒 {lockMessage}</div>}
+            {!isAuthenticated && <div className="lock-banner">{lockMessage}</div>}
 
             <main className="app-main">
                 {/* ZONE HAUTE : cookie à gauche, carte info à droite */}
@@ -1836,7 +1893,6 @@ function App() {
                                         type="button"
                                         className={`cookie-button ${isCookiePressed ? 'cookie-button--pressed' : ''}`}
                                         onClick={handleCookieClick}
-                                        disabled={isLocked}
                                     >
                                         <div className="cookie-ring">
                                             <div className="cookie-ring-inner">
@@ -1885,8 +1941,10 @@ function App() {
                             {activeInfoTab !== 'leaderboard' && (
                                 <div className="info-top3">
                                     <div className="info-top3-heading">
-                                        <h2 className="info-top3-title">Top 3 joueurs</h2>
-                                        <p className="info-top3-subtitle">Basé sur les meilleurs gains en un seul coup de casino.</p>
+                                        <h2 className="info-top3-title">
+                                            Top 3 joueurs
+                                            <span className="info-top3-subtitle"> · Basé sur les meilleurs gains en un seul coup de casino.</span>
+                                        </h2>
                                     </div>
                                     <ol className="top3-list">
                                         {globalTop3.length === 0 ? (
@@ -1920,10 +1978,6 @@ function App() {
                                 {/* Onglet AMÉLIORATIONS */}
                                 {activeInfoTab === 'upgrades' && (
                                     <div className="info-upgrades">
-                                        <p className="info-section-intro">
-                                            Investis tes cookies dans des boosts permanents. Les bâtiments produisent en continu, les clics deviennent monstrueux.
-                                        </p>
-
                                         <div className="upgrade-tabs">
                                             {UPGRADE_CATEGORIES.map((category) => (
                                                 <button
@@ -1954,7 +2008,7 @@ function App() {
                                                                     type="button"
                                                                     className={`shop-item${affordable ? ' shop-item--affordable' : ''}`}
                                                                     onClick={() => handleBuyUpgrade(upgrade)}
-                                                                    disabled={isLocked || !affordable}
+                                                                    disabled={!affordable}
                                                                 >
                                                                     <div className="shop-item-main">
                                                                         <div className="shop-item-icon">{upgrade.emoji}</div>
@@ -1990,10 +2044,6 @@ function App() {
                                             <h3>Succès</h3>
                                             <p className="achievements-count">{unlockedAchievements.length} / {ACHIEVEMENTS.length} débloqués</p>
                                         </div>
-                                        <p className="info-section-intro">
-                                            Débloque des succès en cliquant, investissant et en testant le casino. Rien n’est monétisé, c’est juste pour le fun et le challenge.
-                                        </p>
-
                                         <div className="achievements-list">
                                             {ACHIEVEMENTS.map((ach) => {
                                                 const unlocked = unlockedAchievementIds.has(ach.id);
@@ -2067,42 +2117,6 @@ function App() {
                                                 )}
                                             </div>
 
-                                            <div className="leaderboard-block">
-                                                <h4 className="leaderboard-block-title">Top gains du jour (local)</h4>
-                                                {todayTopWins.length === 0 ? (
-                                                    <p className="leaderboard-empty">Aucun gros gain local aujourd&apos;hui. À toi de jouer ✨</p>
-                                                ) : (
-                                                    <ul className="leaderboard-list">
-                                                        {todayTopWins.map((entry, index) => (
-                                                            <li key={entry.id} className="leaderboard-row">
-                                                                <span className="leaderboard-rank">#{index + 1}</span>
-                                                                <span className="leaderboard-name">{entry.playerName}</span>
-                                                                <span className="leaderboard-amount">{formatNumber(entry.amount, 1)}</span>
-                                                                <span className="leaderboard-source">{entry.source === 'wheel' ? 'Roue' : entry.source === 'case' ? 'Caisse' : 'High roll'}</span>
-                                                            </li>
-                                                        ))}
-                                                    </ul>
-                                                )}
-                                            </div>
-
-                                            <div className="leaderboard-block">
-                                                <h4 className="leaderboard-block-title">Records absolus (local)</h4>
-                                                {allTimeTopWins.length === 0 ? (
-                                                    <p className="leaderboard-empty">Pas encore de record enregistré sur ce navigateur.</p>
-                                                ) : (
-                                                    <ul className="leaderboard-list">
-                                                        {allTimeTopWins.map((entry, index) => (
-                                                            <li key={entry.id} className="leaderboard-row">
-                                                                <span className="leaderboard-rank">#{index + 1}</span>
-                                                                <span className="leaderboard-name">{entry.playerName}</span>
-                                                                <span className="leaderboard-amount">{formatNumber(entry.amount, 1)}</span>
-                                                                <span className="leaderboard-source">{entry.source === 'wheel' ? 'Roue' : entry.source === 'case' ? 'Caisse' : 'High roll'}</span>
-                                                            </li>
-                                                        ))}
-                                                    </ul>
-                                                )}
-                                                <p className="leaderboard-note">Classement stocké uniquement dans ton navigateur.</p>
-                                            </div>
                                         </div>
                                     </div>
                                 )}
@@ -2144,7 +2158,7 @@ function App() {
                                     type="button"
                                     className="primary-button"
                                     onClick={handleWheelSpin}
-                                    disabled={isLocked || isWheelSpinning || game.cookies < MIN_WHEEL_BET}
+                                    disabled={isWheelSpinning || game.cookies < MIN_WHEEL_BET}
                                 >
                                     {isWheelSpinning ? 'La roue tourne...' : 'Spin 🎰'}
                                 </button>
@@ -2167,7 +2181,7 @@ function App() {
 
                             <div className="cases-list">
                                 {CASE_DEFINITIONS.map((c) => {
-                                    const disabled = isLocked || game.cookies < c.cost || openingCaseId === c.id;
+                                    const disabled = game.cookies < c.cost || openingCaseId === c.id;
                                     const opening = openingCaseId === c.id;
 
                                     return (
@@ -2205,10 +2219,10 @@ function App() {
                             </div>
 
                             <div className="highroll-actions">
-                                <button type="button" className="secondary-button" disabled={isLocked || game.cookies < 1_000} onClick={() => handleHighRoll(false)}>
+                                <button type="button" className="secondary-button" disabled={game.cookies < 1_000} onClick={() => handleHighRoll(false)}>
                                     Mise forte
                                 </button>
-                                <button type="button" className="danger-button" disabled={isLocked || game.cookies < 1_000} onClick={() => handleHighRoll(true)}>
+                                <button type="button" className="danger-button" disabled={game.cookies < 1_000} onClick={() => handleHighRoll(true)}>
                                     ALL-IN 💀
                                 </button>
                             </div>
@@ -2252,22 +2266,11 @@ function App() {
                 </section>
             </main>
 
-            {!currentUser && !isAuthPanelOpen && !isAuthNudgeDismissed && (
-                <div className="auth-nudge">
-                    <button type="button" className="auth-nudge__close" aria-label="Fermer le rappel d'inscription" onClick={() => setIsAuthNudgeDismissed(true)}>✕</button>
-                    <div>
-                        <div className="auth-nudge__title">Connecte-toi pour jouer</div>
-                        <div className="auth-nudge__text">Tes clics, upgrades et paris nécessitent un compte gratuit.</div>
-                    </div>
-                    <button type="button" className="primary-button auth-nudge__button" onClick={() => setIsAuthPanelOpen(true)}>Ouvrir</button>
-                </div>
-            )}
-
             <div className={`auth-widget ${isAuthPanelOpen ? 'auth-widget--open' : ''}`}>
                 <div className="auth-widget__header">
                     <div>
                         <div className="auth-widget__title">{currentUser ? 'Profil & sauvegarde cloud' : 'Connexion / inscription'}</div>
-                        <div className="auth-widget__subtitle">{currentUser ? 'Gère ton pseudo et ta sauvegarde sécurisée.' : 'Aucun jeu hors ligne : connecte-toi pour cliquer et jouer.'}</div>
+                        <div className="auth-widget__subtitle">{currentUser ? 'Gère ton pseudo et ta sauvegarde sécurisée.' : 'Joue immédiatement, connecte-toi pour sauvegarder et figurer au classement global.'}</div>
                     </div>
                     <button type="button" className="ghost-button auth-widget__close" onClick={() => setIsAuthPanelOpen(false)}>✕</button>
                 </div>
@@ -2285,6 +2288,24 @@ function App() {
                     </div>
 
                     <div className="auth-widget__status">{authMessage}</div>
+
+                    {!currentUser && (
+                        <div className="auth-widget__anonymous">
+                            <button
+                                type="button"
+                                className="ghost-button"
+                                onClick={() => {
+                                    ensureSessionId();
+                                    setIsAuthPanelOpen(false);
+                                }}
+                            >
+                                ▶️ Jouer sans compte
+                            </button>
+                            <p className="auth-widget__hint">
+                                Tu peux jouer sans compte — la sauvegarde cloud et le classement global nécessitent une connexion.
+                            </p>
+                        </div>
+                    )}
 
                     {currentUser && (
                         <>
