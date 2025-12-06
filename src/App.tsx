@@ -400,7 +400,6 @@ const UPGRADE_DEFINITIONS: UpgradeDefinition[] = [
     },
 ];
 
-// Catégories d'améliorations pour le menu à 3 onglets
 type UpgradeCategoryId = 'auto' | 'click' | 'cosmetic';
 
 const UPGRADE_CATEGORIES: {
@@ -408,24 +407,23 @@ const UPGRADE_CATEGORIES: {
     label: string;
     description: string;
 }[] = [
-        {
-            id: 'auto',
-            label: 'Production automatique',
-            description: 'Génère des cookies en continu.',
-        },
-        {
-            id: 'click',
-            label: 'Clic manuel',
-            description: 'Rend chaque clic plus puissant.',
-        },
-        {
-            id: 'cosmetic',
-            label: 'Cosmétiques',
-            description: 'Uniquement visuel, pour styliser ton cookie.',
-        },
-    ];
+    {
+        id: 'auto',
+        label: 'Production automatique',
+        description: 'Génère des cookies en continu.',
+    },
+    {
+        id: 'click',
+        label: 'Clic manuel',
+        description: 'Rend chaque clic plus puissant.',
+    },
+    {
+        id: 'cosmetic',
+        label: 'Cosmétiques',
+        description: 'Uniquement visuel, pour styliser ton cookie.',
+    },
+];
 
-// Répartition des upgrades par catégorie (en fonction des stats)
 const UPGRADE_DEFINITIONS_BY_CATEGORY: Record<
     UpgradeCategoryId,
     UpgradeDefinition[]
@@ -438,7 +436,7 @@ const UPGRADE_DEFINITIONS_BY_CATEGORY: Record<
 for (const upgrade of UPGRADE_DEFINITIONS) {
     if (upgrade.cps > 0) {
         UPGRADE_DEFINITIONS_BY_CATEGORY.auto.push(upgrade);
-    } else if (upgrade.clickBonus > 0) {
+    } else if (upgrade.clickBonus > 0 || upgrade.clickPercentOfCps) {
         UPGRADE_DEFINITIONS_BY_CATEGORY.click.push(upgrade);
     } else {
         UPGRADE_DEFINITIONS_BY_CATEGORY.cosmetic.push(upgrade);
@@ -628,20 +626,14 @@ const ACHIEVEMENTS: Achievement[] = [
         label: 'Collectionneur',
         description: 'Achète au moins 10 améliorations.',
         check: (state) =>
-            Object.values(state.upgrades).reduce(
-                (sum, q) => sum + (q || 0),
-                0,
-            ) >= 10,
+            Object.values(state.upgrades).reduce((sum, q) => sum + (q || 0), 0) >= 10,
     },
     {
         id: 'upgrade-tycoon',
         label: 'Tycoon des upgrades',
         description: 'Achète au moins 50 améliorations.',
         check: (state) =>
-            Object.values(state.upgrades).reduce(
-                (sum, q) => sum + (q || 0),
-                0,
-            ) >= 50,
+            Object.values(state.upgrades).reduce((sum, q) => sum + (q || 0), 0) >= 50,
     },
     {
         id: 'upgrade-mogul',
@@ -656,10 +648,7 @@ const ACHIEVEMENTS: Achievement[] = [
                 'crit-click',
                 'click-frenzy',
             ];
-            const total = ids.reduce(
-                (sum, id) => sum + (state.upgrades[id] ?? 0),
-                0,
-            );
+            const total = ids.reduce((sum, id) => sum + (state.upgrades[id] ?? 0), 0);
             return total >= 10;
         },
     },
@@ -776,17 +765,14 @@ const ACHIEVEMENTS: Achievement[] = [
         label: 'Casino maîtrisé',
         description:
             'Gagne au moins 100 000 cookies au total en casino sans ruiner ton stock (jamais moins de 0).',
-        check: (state) =>
-            state.gamblingStats.biggestWin >= 100_000 &&
-            state.cookies > 0,
+        check: (state) => state.gamblingStats.biggestWin >= 100_000 && state.cookies > 0,
     },
     {
         id: 'total-ruin',
         label: 'Ruine totale',
         description:
             'Perds tout au casino après avoir gagné au moins 50 000 cookies.',
-        check: (state) =>
-            state.cookies <= 0 && state.gamblingStats.biggestWin >= 50_000,
+        check: (state) => state.cookies <= 0 && state.gamblingStats.biggestWin >= 50_000,
     },
 ];
 
@@ -948,9 +934,7 @@ function safeMergeGameState(rawState: unknown): GameState {
         ...defaultGameState,
         ...parsed,
         cookies: clampNumber(parsed.cookies ?? defaultGameState.cookies),
-        totalCookies: clampNumber(
-            parsed.totalCookies ?? defaultGameState.totalCookies,
-        ),
+        totalCookies: clampNumber(parsed.totalCookies ?? defaultGameState.totalCookies),
         upgrades: sanitizedUpgrades,
         activeBuffs: (parsed.activeBuffs ?? []).filter(
             (buff) => buff.expiresAt > Date.now() && buff.expiresAt < Date.now() + 86_400_000,
@@ -959,24 +943,15 @@ function safeMergeGameState(rawState: unknown): GameState {
             ...defaultGameState.gamblingStats,
             ...(parsed.gamblingStats ?? {}),
         },
-        playerName: sanitizePlayerName(
-            parsed.playerName ?? defaultGameState.playerName,
-        ),
-        playerName: (parsed.playerName ?? '').slice(0, 16),
+        playerName: sanitizePlayerName((parsed.playerName ?? '').slice(0, 16)),
         leaderboard: (parsed.leaderboard ?? []).slice(0, 50),
         totalClicks: clampNumber(parsed.totalClicks ?? 0, 1e9),
-        totalUpgradesPurchased: clampNumber(
-            parsed.totalUpgradesPurchased ?? 0,
-            1e9,
-        ),
+        totalUpgradesPurchased: clampNumber(parsed.totalUpgradesPurchased ?? 0, 1e9),
     };
 
     const lastSaved = (rawState as { lastSaved?: number }).lastSaved;
     if (typeof lastSaved === 'number') {
-        const elapsedSeconds = Math.min(
-            86_400,
-            Math.max(0, (Date.now() - lastSaved) / 1000),
-        );
+        const elapsedSeconds = Math.min(86_400, Math.max(0, (Date.now() - lastSaved) / 1000));
         const cps = computeBaseCps(merged);
         const gained = Math.max(0, Math.min(MAX_REASONABLE_COOKIES, cps * elapsedSeconds));
 
@@ -984,9 +959,7 @@ function safeMergeGameState(rawState: unknown): GameState {
             ...merged,
             cookies: clampNumber(merged.cookies + gained),
             totalCookies: clampNumber(merged.totalCookies + gained),
-            activeBuffs: merged.activeBuffs.filter(
-                (buff) => buff.expiresAt > Date.now(),
-            ),
+            activeBuffs: merged.activeBuffs.filter((buff) => buff.expiresAt > Date.now()),
         };
     }
 
@@ -1046,9 +1019,7 @@ function persistGame(state: GameState, uid: string | null) {
 
     try {
         if (typeof document !== 'undefined') {
-            document.cookie = `${cookieKey}=${encodeURIComponent(
-                JSON.stringify(payload),
-            )};path=/;max-age=31536000`;
+            document.cookie = `${cookieKey}=${encodeURIComponent(JSON.stringify(payload))};path=/;max-age=31536000`;
         }
     } catch (error) {
         console.error('Erreur de sauvegarde cookie :', error);
@@ -1062,8 +1033,7 @@ async function pushWinToGlobalLeaderboard(
 ) {
     if (!user) return;
 
-    const safeName = sanitizePlayerName(playerName);
-    const safeName = (playerName || 'Invité').trim().slice(0, 16);
+    const safeName = sanitizePlayerName((playerName || DEFAULT_PLAYER_NAME).trim().slice(0, 16));
     const safeScore = Math.max(0, Math.round(amount));
 
     if (!safeScore) return;
@@ -1100,9 +1070,7 @@ function App() {
     const [cloudMessage, setCloudMessage] = useState('');
     const [game, setGame] = useState<GameState>({ ...defaultGameState });
 
-    const [globalLeaderboard, setGlobalLeaderboard] = useState<GlobalEntry[]>(
-        [],
-    );
+    const [globalLeaderboard, setGlobalLeaderboard] = useState<GlobalEntry[]>([]);
     const [lastSyncedBestWin, setLastSyncedBestWin] = useState<number>(() => {
         if (typeof window === 'undefined') return 0;
         const raw = window.localStorage.getItem(LAST_SYNCED_BEST_KEY);
@@ -1113,30 +1081,21 @@ function App() {
     const [isCookiePressed, setIsCookiePressed] = useState(false);
     const [isWheelSpinning, setIsWheelSpinning] = useState(false);
     const [openingCaseId, setOpeningCaseId] = useState<CaseId | null>(null);
-    const [lastWheelResult, setLastWheelResult] =
-        useState<LastWheelResult | null>(null);
-    const [lastCaseResult, setLastCaseResult] =
-        useState<LastCaseResult | null>(null);
-    const [lastHighRoll, setLastHighRoll] =
-        useState<LastHighRollResult | null>(null);
+    const [lastWheelResult, setLastWheelResult] = useState<LastWheelResult | null>(null);
+    const [lastCaseResult, setLastCaseResult] = useState<LastCaseResult | null>(null);
+    const [lastHighRoll, setLastHighRoll] = useState<LastHighRollResult | null>(null);
     const [wheelBet, setWheelBet] = useState<number>(500);
     const [overlay, setOverlay] = useState<OverlayState>(null);
-    const [lockMessage, setLockMessage] = useState(
-        'Connecte-toi pour jouer.',
-    );
+    const [lockMessage, setLockMessage] = useState('Connecte-toi pour jouer.');
 
-    const [selectedUpgradeCategory, setSelectedUpgradeCategory] =
-        useState<UpgradeCategoryId>('auto');
+    const [selectedUpgradeCategory, setSelectedUpgradeCategory] = useState<UpgradeCategoryId>('auto');
 
-    const [activeInfoTab, setActiveInfoTab] =
-        useState<InfoTabId>('upgrades');
+    const [activeInfoTab, setActiveInfoTab] = useState<InfoTabId>('upgrades');
 
-    const [playerNameDraft, setPlayerNameDraft] = useState(
-        sanitizePlayerName(game.playerName),
-        game.playerName || DEFAULT_PLAYER_NAME,
-    );
+    const [playerNameDraft, setPlayerNameDraft] = useState(sanitizePlayerName(game.playerName));
     const [isAuthPanelOpen, setIsAuthPanelOpen] = useState(false);
     const [isAuthNudgeDismissed, setIsAuthNudgeDismissed] = useState(false);
+    const [isPlayerModalOpen, setIsPlayerModalOpen] = useState(false);
 
     const isLocked = !currentUser;
 
@@ -1154,11 +1113,7 @@ function App() {
         event?.preventDefault();
         setAuthMessage('');
         try {
-            const cred = await createUserWithEmailAndPassword(
-                auth,
-                authEmail.trim(),
-                authPassword,
-            );
+            const cred = await createUserWithEmailAndPassword(auth, authEmail.trim(), authPassword);
             const displayName = sanitizePlayerName(playerNameDraft);
             await updateProfile(cred.user, { displayName });
             setAuthMessage('Compte créé et connecté.');
@@ -1171,11 +1126,7 @@ function App() {
         event?.preventDefault();
         setAuthMessage('');
         try {
-            await signInWithEmailAndPassword(
-                auth,
-                authEmail.trim(),
-                authPassword,
-            );
+            await signInWithEmailAndPassword(auth, authEmail.trim(), authPassword);
             setAuthMessage('Connexion réussie.');
         } catch (error: any) {
             setAuthMessage(error?.message ?? 'Connexion impossible.');
@@ -1211,158 +1162,11 @@ function App() {
                 });
                 if (!silent) setCloudMessage('Sauvegarde cloud effectuée.');
             } catch (error: any) {
-                if (!silent)
-                    setCloudMessage(
-                        error?.message ?? 'Erreur lors de la sauvegarde cloud.',
-                    );
+                if (!silent) setCloudMessage(error?.message ?? 'Erreur lors de la sauvegarde cloud.');
             }
         },
         [currentUser, ensureConnected, game],
     );
-    const [isAuthPanelOpen, setIsAuthPanelOpen] = useState(false);
-
-    const isLocked = !currentUser;
-
-    const ensureConnected = useCallback(() => {
-        if (!currentUser) {
-            setLockMessage('Connecte-toi pour jouer.');
-            setAuthMessage('Connexion requise pour jouer.');
-            setIsAuthPanelOpen(true);
-            return false;
-        }
-        return true;
-    }, [currentUser]);
-
-    const handleSignup = async (event?: React.SyntheticEvent) => {
-        event?.preventDefault();
-        setAuthMessage('');
-        try {
-            const cred = await createUserWithEmailAndPassword(
-                auth,
-                authEmail.trim(),
-                authPassword,
-            );
-            const displayName = playerNameDraft.trim().slice(0, 16) || 'Joueur';
-            await updateProfile(cred.user, { displayName });
-            setAuthMessage('Compte créé et connecté.');
-        } catch (error: any) {
-            setAuthMessage(error?.message ?? 'Erreur de création de compte.');
-        }
-    };
-
-    const handleLogin = async (event?: React.SyntheticEvent) => {
-        event?.preventDefault();
-        setAuthMessage('');
-        try {
-            await signInWithEmailAndPassword(
-                auth,
-                authEmail.trim(),
-                authPassword,
-            );
-            setAuthMessage('Connexion réussie.');
-        } catch (error: any) {
-            setAuthMessage(error?.message ?? 'Connexion impossible.');
-        }
-    };
-
-    const handlePasswordReset = async () => {
-        if (!authEmail.trim()) {
-            setAuthMessage('Saisis ton email pour réinitialiser.');
-            return;
-        }
-        try {
-            await sendPasswordResetEmail(auth, authEmail.trim());
-            setAuthMessage('Email de réinitialisation envoyé.');
-        } catch (error: any) {
-            setAuthMessage(error?.message ?? 'Erreur de réinitialisation.');
-        }
-    };
-
-    const handleLogout = async () => {
-        await signOut(auth);
-        setAuthMessage('Déconnecté.');
-    };
-
-    const handleCloudSave = useCallback(
-        async (silent = false) => {
-            if (!ensureConnected() || !currentUser) return;
-            try {
-                await setDoc(doc(db, 'cloudSaves', currentUser.uid), {
-                    userId: currentUser.uid,
-                    updatedAt: serverTimestamp(),
-                    state: game,
-                });
-                if (!silent) setCloudMessage('Sauvegarde cloud effectuée.');
-            } catch (error: any) {
-                if (!silent)
-                    setCloudMessage(
-                        error?.message ?? 'Erreur lors de la sauvegarde cloud.',
-                    );
-            }
-        },
-        [currentUser, ensureConnected, game],
-    );
-
-    const handleCloudLoad = useCallback(async () => {
-        if (!ensureConnected() || !currentUser) return;
-        const snap = await getDoc(doc(db, 'cloudSaves', currentUser.uid));
-        if (!snap.exists()) {
-            setCloudMessage('Aucune sauvegarde cloud disponible.');
-            return;
-        }
-        const data = snap.data() as { state?: GameState };
-        const cloudState = data?.state ? safeMergeGameState(data.state) : null;
-        if (cloudState) {
-            setGame(cloudState);
-            setCloudMessage('Sauvegarde cloud chargée.');
-        }
-    }, [currentUser, ensureConnected]);
-
-    useEffect(() => {
-        const unsubscribe = onAuthStateChanged(auth, async (user) => {
-            setCurrentUser(user);
-            if (!user) {
-                setGame({ ...defaultGameState });
-                setCloudMessage('Connecte-toi pour jouer.');
-                return;
-            }
-
-            const localState = loadGameState(user.uid);
-            const cloudDoc = await getDoc(doc(db, 'cloudSaves', user.uid));
-            let nextState = { ...localState };
-
-            if (cloudDoc.exists()) {
-                const data = cloudDoc.data() as { state?: GameState };
-                const cloudState = data?.state ? safeMergeGameState(data.state) : null;
-                if (cloudState && cloudState.totalCookies > localState.totalCookies) {
-                    const useCloud = window.confirm(
-                        'Une sauvegarde cloud plus récente existe. Charger le cloud ?',
-                    );
-                    if (useCloud) {
-                        nextState = cloudState;
-                        setCloudMessage('Sauvegarde cloud chargée.');
-                    } else {
-                        setCloudMessage('Cloud ignoré, cache local conservé.');
-                    }
-                }
-            }
-
-            const displayName = user.displayName?.slice(0, 16) ?? nextState.playerName;
-            setGame({ ...nextState, playerName: displayName });
-            setPlayerNameDraft(displayName ?? '');
-            setAuthEmail('');
-            setAuthPassword('');
-            setAuthMessage('Connecté.');
-        });
-
-        return () => unsubscribe();
-    }, []);
-
-    useEffect(() => {
-        if (currentUser) {
-            setIsAuthPanelOpen(false);
-        }
-    }, [currentUser]);
 
     const handleCloudLoad = useCallback(async () => {
         if (!ensureConnected() || !currentUser) return;
@@ -1397,9 +1201,7 @@ function App() {
                 const data = cloudDoc.data() as { state?: GameState };
                 const cloudState = data?.state ? safeMergeGameState(data.state) : null;
                 if (cloudState && cloudState.totalCookies > localState.totalCookies) {
-                    const useCloud = window.confirm(
-                        'Une sauvegarde cloud plus récente existe. Charger le cloud ?',
-                    );
+                    const useCloud = window.confirm('Une sauvegarde cloud plus récente existe. Charger le cloud ?');
                     if (useCloud) {
                         nextState = cloudState;
                         setCloudMessage('Sauvegarde cloud chargée.');
@@ -1409,9 +1211,7 @@ function App() {
                 }
             }
 
-            const displayName = sanitizePlayerName(
-                user.displayName ?? nextState.playerName,
-            );
+            const displayName = sanitizePlayerName(user.displayName ?? nextState.playerName);
             setGame({ ...nextState, playerName: displayName });
             setPlayerNameDraft(displayName ?? DEFAULT_PLAYER_NAME);
             setAuthEmail('');
@@ -1429,10 +1229,7 @@ function App() {
     }, [currentUser]);
 
     const effectiveCps = useMemo(() => computeEffectiveCps(game), [game]);
-    const cookiesPerClick = useMemo(
-        () => computeCookiesPerClick(game),
-        [game],
-    );
+    const cookiesPerClick = useMemo(() => computeCookiesPerClick(game), [game]);
 
     const hasConfettiFx = game.upgrades['visual-confetti'] > 0;
     const hasNeonFx = game.upgrades['visual-neon'] > 0;
@@ -1448,10 +1245,7 @@ function App() {
         .filter(Boolean)
         .join(' ');
 
-    const todayKey = useMemo(
-        () => new Date().toISOString().slice(0, 10),
-        [],
-    );
+    const todayKey = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
     const todayTopWins = useMemo(
         () =>
@@ -1470,24 +1264,15 @@ function App() {
         [game.leaderboard],
     );
 
-    const globalTop3 = useMemo(
-        () => globalLeaderboard.slice(0, 3),
-        [globalLeaderboard],
-    );
-    const globalRest = useMemo(
-        () => globalLeaderboard.slice(3),
-        [globalLeaderboard],
-    );
+    const globalTop3 = useMemo(() => globalLeaderboard.slice(0, 3), [globalLeaderboard]);
+    const globalRest = useMemo(() => globalLeaderboard.slice(3), [globalLeaderboard]);
 
     // Production automatique
     useEffect(() => {
         const interval = window.setInterval(() => {
             setGame((prev) => {
                 const activeBuffs = pruneExpiredBuffs(prev.activeBuffs);
-                const stateWithBuffs: GameState =
-                    activeBuffs === prev.activeBuffs
-                        ? prev
-                        : { ...prev, activeBuffs };
+                const stateWithBuffs: GameState = activeBuffs === prev.activeBuffs ? prev : { ...prev, activeBuffs };
 
                 const cps = computeEffectiveCps(stateWithBuffs);
                 if (cps <= 0) return stateWithBuffs;
@@ -1506,11 +1291,12 @@ function App() {
         return () => window.clearInterval(interval);
     }, []);
 
-    // Sauvegarde
+    // Sauvegarde locale à chaque changement
     useEffect(() => {
         persistGame(game, currentUser?.uid ?? null);
     }, [game, currentUser?.uid]);
 
+    // Sauvegarde cloud périodique
     useEffect(() => {
         if (!currentUser) return;
         const interval = window.setInterval(() => {
@@ -1537,7 +1323,6 @@ function App() {
 
     useEffect(() => {
         setPlayerNameDraft(sanitizePlayerName(game.playerName));
-        setPlayerNameDraft(game.playerName || DEFAULT_PLAYER_NAME);
     }, [game.playerName]);
 
     // Sync meilleur gain local -> Firestore
@@ -1561,13 +1346,7 @@ function App() {
         }
 
         void pushWinToGlobalLeaderboard(currentUser, game.playerName, best);
-    }, [
-        currentUser,
-        game.gamblingStats.biggestWin,
-        game.playerName,
-        game.totalCookies,
-        lastSyncedBestWin,
-    ]);
+    }, [currentUser, game.gamblingStats.biggestWin, game.playerName, game.totalCookies, lastSyncedBestWin]);
 
     // Listener Firestore unique pour le leaderboard global
     useEffect(() => {
@@ -1581,9 +1360,7 @@ function App() {
                     id: doc.id,
                     name: data.name ?? '???',
                     score: data.score ?? 0,
-                    createdAt: data.createdAt?.toDate
-                        ? data.createdAt.toDate()
-                        : undefined,
+                    createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : undefined,
                 };
             });
             setGlobalLeaderboard(entries);
@@ -1601,9 +1378,7 @@ function App() {
             // Clic critique
             const critUpgrades = prev.upgrades['crit-click'] ?? 0;
             if (critUpgrades > 0) {
-                const def = UPGRADE_DEFINITIONS.find(
-                    (u) => u.id === 'crit-click',
-                );
+                const def = UPGRADE_DEFINITIONS.find((u) => u.id === 'crit-click');
                 const perLevel = def?.critChanceBonus ?? 0.05;
                 const critMultiplier = def?.critMultiplier ?? 5;
                 const chance = clamp(perLevel * critUpgrades, 0, 0.5);
@@ -1627,11 +1402,7 @@ function App() {
     const applyFrenzyBuffIfNeeded = useCallback(
         (upgrade: UpgradeDefinition, prev: GameState): GameState => {
             if (upgrade.id !== 'click-frenzy') return prev;
-            if (
-                !upgrade.frenzyDurationSeconds ||
-                !upgrade.frenzyClickMultiplier
-            )
-                return prev;
+            if (!upgrade.frenzyDurationSeconds || !upgrade.frenzyClickMultiplier) return prev;
 
             const now = Date.now();
             const buff: ActiveBuff = {
@@ -1678,11 +1449,7 @@ function App() {
     };
 
     const handleReset = () => {
-        if (
-            window.confirm(
-                'Réinitialiser complètement ta partie ? Tu perdras tous tes cookies et améliorations.',
-            )
-        ) {
+        if (window.confirm('Réinitialiser complètement ta partie ? Tu perdras tous tes cookies et améliorations.')) {
             setGame((prev) => ({
                 ...defaultGameState,
                 theme: prev.theme,
@@ -1706,8 +1473,6 @@ function App() {
     const handleSavePlayerName = () => {
         if (!ensureConnected()) return;
         const safeName = sanitizePlayerName(playerNameDraft);
-        const trimmed = playerNameDraft.trim().slice(0, 16);
-        const safeName = trimmed || 'Joueur';
         setGame((prev) => ({
             ...prev,
             playerName: safeName,
@@ -1732,11 +1497,7 @@ function App() {
 
         setGame((prev) => {
             const maxBet = Math.floor(prev.cookies);
-            const normalizedBet = clamp(
-                Math.floor(wheelBet),
-                MIN_WHEEL_BET,
-                maxBet,
-            );
+            const normalizedBet = clamp(Math.floor(wheelBet), MIN_WHEEL_BET, maxBet);
 
             if (normalizedBet <= 0 || maxBet <= 0) {
                 spinResult = null;
@@ -1750,11 +1511,7 @@ function App() {
 
             let buffLabel: string | undefined;
 
-            if (
-                segment.kind === 'buff' &&
-                segment.buffDurationSeconds &&
-                (segment.buffCpsMultiplier || segment.buffClickMultiplier)
-            ) {
+            if (segment.kind === 'buff' && segment.buffDurationSeconds && (segment.buffCpsMultiplier || segment.buffClickMultiplier)) {
                 const now = Date.now();
                 const buff: ActiveBuff = {
                     id: `buff-${segment.id}-${now}`,
@@ -1775,36 +1532,22 @@ function App() {
             const isWin = delta > 0;
             const isJackpot = segment.id === 'jackpot';
 
-            let consecutiveLosses = isWin
-                ? 0
-                : prev.gamblingStats.consecutiveLosses + 1;
-            const maxConsecutiveLosses = Math.max(
-                prev.gamblingStats.maxConsecutiveLosses,
-                consecutiveLosses,
-            );
+            let consecutiveLosses = isWin ? 0 : prev.gamblingStats.consecutiveLosses + 1;
+            const maxConsecutiveLosses = Math.max(prev.gamblingStats.maxConsecutiveLosses, consecutiveLosses);
 
-            const jackpotStreak = isJackpot
-                ? prev.gamblingStats.jackpotStreak + 1
-                : 0;
-            const maxJackpotStreak = Math.max(
-                prev.gamblingStats.maxJackpotStreak,
-                jackpotStreak,
-            );
+            const jackpotStreak = isJackpot ? prev.gamblingStats.jackpotStreak + 1 : 0;
+            const maxJackpotStreak = Math.max(prev.gamblingStats.maxJackpotStreak, jackpotStreak);
 
             if (delta > 0) {
                 biggestWin = Math.max(biggestWin, delta);
                 const entry: LeaderboardEntry = {
-                    id: `wheel-${Date.now()}-${Math.random()
-                        .toString(36)
-                        .slice(2)}`,
+                    id: `wheel-${Date.now()}-${Math.random().toString(36).slice(2)}`,
                     playerName: prev.playerName || DEFAULT_PLAYER_NAME,
                     amount: delta,
                     date: new Date().toISOString(),
                     source: 'wheel',
                 };
-                leaderboard = [...leaderboard, entry]
-                    .sort((a, b) => b.amount - a.amount)
-                    .slice(0, 50);
+                leaderboard = [...leaderboard, entry].sort((a, b) => b.amount - a.amount).slice(0, 50);
             }
 
             spinResult = {
@@ -1872,10 +1615,7 @@ function App() {
                     isLoss = true;
                 } else {
                     const r = Math.random();
-                    rewardMultiplier =
-                        caseDef.minMultiplier +
-                        r *
-                        (caseDef.maxMultiplier - caseDef.minMultiplier);
+                    rewardMultiplier = caseDef.minMultiplier + r * (caseDef.maxMultiplier - caseDef.minMultiplier);
                 }
 
                 const reward = bet * rewardMultiplier;
@@ -1888,36 +1628,22 @@ function App() {
 
                 const isWin = delta > 0;
 
-                let consecutiveLosses = isWin
-                    ? 0
-                    : prev.gamblingStats.consecutiveLosses + 1;
-                const maxConsecutiveLosses = Math.max(
-                    prev.gamblingStats.maxConsecutiveLosses,
-                    consecutiveLosses,
-                );
+                let consecutiveLosses = isWin ? 0 : prev.gamblingStats.consecutiveLosses + 1;
+                const maxConsecutiveLosses = Math.max(prev.gamblingStats.maxConsecutiveLosses, consecutiveLosses);
 
-                const jackpotStreak = isJackpot
-                    ? prev.gamblingStats.jackpotStreak + 1
-                    : 0;
-                const maxJackpotStreak = Math.max(
-                    prev.gamblingStats.maxJackpotStreak,
-                    jackpotStreak,
-                );
+                const jackpotStreak = isJackpot ? prev.gamblingStats.jackpotStreak + 1 : 0;
+                const maxJackpotStreak = Math.max(prev.gamblingStats.maxJackpotStreak, jackpotStreak);
 
                 if (delta > 0) {
                     biggestWin = Math.max(biggestWin, delta);
                     const entry: LeaderboardEntry = {
-                        id: `case-${Date.now()}-${Math.random()
-                            .toString(36)
-                            .slice(2)}`,
+                        id: `case-${Date.now()}-${Math.random().toString(36).slice(2)}`,
                         playerName: prev.playerName || DEFAULT_PLAYER_NAME,
                         amount: delta,
                         date: new Date().toISOString(),
                         source: 'case',
                     };
-                    leaderboard = [...leaderboard, entry]
-                        .sort((a, b) => b.amount - a.amount)
-                        .slice(0, 50);
+                    leaderboard = [...leaderboard, entry].sort((a, b) => b.amount - a.amount).slice(0, 50);
                 }
 
                 caseResult = {
@@ -1985,13 +1711,8 @@ function App() {
 
             const isWin = win && delta > 0;
 
-            let consecutiveLosses = isWin
-                ? 0
-                : prev.gamblingStats.consecutiveLosses + 1;
-            const maxConsecutiveLosses = Math.max(
-                prev.gamblingStats.maxConsecutiveLosses,
-                consecutiveLosses,
-            );
+            let consecutiveLosses = isWin ? 0 : prev.gamblingStats.consecutiveLosses + 1;
+            const maxConsecutiveLosses = Math.max(prev.gamblingStats.maxConsecutiveLosses, consecutiveLosses);
 
             let jackpotStreak = 0;
             const maxJackpotStreak = prev.gamblingStats.maxJackpotStreak;
@@ -2004,17 +1725,13 @@ function App() {
             if (isWin) {
                 biggestWin = Math.max(biggestWin, delta);
                 const entry: LeaderboardEntry = {
-                    id: `highroll-${Date.now()}-${Math.random()
-                        .toString(36)
-                        .slice(2)}`,
+                    id: `highroll-${Date.now()}-${Math.random().toString(36).slice(2)}`,
                     playerName: prev.playerName || DEFAULT_PLAYER_NAME,
                     amount: delta,
                     date: new Date().toISOString(),
                     source: 'highroll',
                 };
-                leaderboard = [...leaderboard, entry]
-                    .sort((a, b) => b.amount - a.amount)
-                    .slice(0, 50);
+                leaderboard = [...leaderboard, entry].sort((a, b) => b.amount - a.amount).slice(0, 50);
             }
 
             highRollResult = {
@@ -2048,13 +1765,8 @@ function App() {
         }
     };
 
-    const unlockedAchievements = useMemo(
-        () => ACHIEVEMENTS.filter((ach) => ach.check(game, effectiveCps)),
-        [game, effectiveCps],
-    );
-    const unlockedAchievementIds = new Set(
-        unlockedAchievements.map((a) => a.id),
-    );
+    const unlockedAchievements = useMemo(() => ACHIEVEMENTS.filter((ach) => ach.check(game, effectiveCps)), [game, effectiveCps]);
+    const unlockedAchievementIds = new Set(unlockedAchievements.map((a) => a.id));
 
     const closeOverlay = () => setOverlay(null);
 
@@ -2081,9 +1793,7 @@ function App() {
                         className="ghost-button auth-toggle"
                         onClick={() => setIsAuthPanelOpen(true)}
                     >
-                        {currentUser
-                            ? `👤 ${game.playerName || 'Profil'}`
-                            : '🔐 Connexion / Inscription'}
+                        {currentUser ? `👤 ${game.playerName || 'Profil'}` : '🔐 Connexion / Inscription'}
                     </button>
                     <div className="player-chip">
                         <span className="player-chip-label">Joueur</span>
@@ -2094,40 +1804,24 @@ function App() {
                             type="button"
                             className="player-chip-edit"
                             onClick={() => {
-                                setPlayerNameDraft(
-                                    game.playerName || DEFAULT_PLAYER_NAME,
-                                );
-                                setIsAuthPanelOpen(true);
+                                setPlayerNameDraft(game.playerName || DEFAULT_PLAYER_NAME);
+                                setIsPlayerModalOpen(true);
                             }}
                         >
                             ✏️
                         </button>
                     </div>
 
-                    <button
-                        type="button"
-                        className="ghost-button"
-                        onClick={toggleTheme}
-                    >
-                        {game.theme === 'dark'
-                            ? '☀️ Mode clair'
-                            : '🌙 Mode sombre'}
+                    <button type="button" className="ghost-button" onClick={toggleTheme}>
+                        {game.theme === 'dark' ? '☀️ Mode clair' : '🌙 Mode sombre'}
                     </button>
-                    <button
-                        type="button"
-                        className="ghost-button ghost-button--danger"
-                        onClick={handleReset}
-                    >
+                    <button type="button" className="ghost-button ghost-button--danger" onClick={handleReset}>
                         🔁 Reset
                     </button>
                 </div>
             </header>
 
-            {isLocked && (
-                <div className="lock-banner">
-                    🔒 {lockMessage}
-                </div>
-            )}
+            {isLocked && <div className="lock-banner">🔒 {lockMessage}</div>}
 
             <main className="app-main">
                 {/* ZONE HAUTE : cookie à gauche, carte info à droite */}
@@ -2140,10 +1834,7 @@ function App() {
                                 <div className="cookie-main">
                                     <button
                                         type="button"
-                                        className={`cookie-button ${isCookiePressed
-                                                ? 'cookie-button--pressed'
-                                                : ''
-                                            }`}
+                                        className={`cookie-button ${isCookiePressed ? 'cookie-button--pressed' : ''}`}
                                         onClick={handleCookieClick}
                                         disabled={isLocked}
                                     >
@@ -2162,44 +1853,22 @@ function App() {
 
                                     <div className="cookie-stats">
                                         <p className="cookie-main-count">
-                                            {formatNumber(game.cookies, 1)}{' '}
-                                            cookies
+                                            {formatNumber(game.cookies, 1)} cookies
                                         </p>
                                         <p className="cookie-sub">
-                                            {formatNumber(
-                                                cookiesPerClick,
-                                                2,
-                                            )}{' '}
-                                            par clic ·{' '}
-                                            {formatNumber(
-                                                effectiveCps,
-                                                2,
-                                            )}{' '}
-                                            / sec
+                                            {formatNumber(cookiesPerClick, 2)} par clic · {formatNumber(effectiveCps, 2)} / sec
                                         </p>
                                         <p className="cookie-sub cookie-sub--secondary">
-                                            Total généré :{' '}
-                                            {formatNumber(
-                                                game.totalCookies,
-                                                1,
-                                            )}{' '}
-                                            cookies
+                                            Total généré : {formatNumber(game.totalCookies, 1)} cookies
                                         </p>
                                     </div>
 
                                     {game.activeBuffs.length > 0 && (
                                         <div className="buffs-bar">
                                             {game.activeBuffs.map((buff) => (
-                                                <span
-                                                    key={buff.id}
-                                                    className="buff-pill"
-                                                >
-                                                    <span className="buff-pill-emoji">
-                                                        ⚡
-                                                    </span>
-                                                    <span className="buff-pill-label">
-                                                        {buff.label}
-                                                    </span>
+                                                <span key={buff.id} className="buff-pill">
+                                                    <span className="buff-pill-emoji">⚡</span>
+                                                    <span className="buff-pill-label">{buff.label}</span>
                                                 </span>
                                             ))}
                                         </div>
@@ -2211,60 +1880,29 @@ function App() {
 
                     {/* Colonne droite : carte d'info (Top3 + onglets) */}
                     <section className="top-layout-right">
-                        <section
-                            className={`info-panel ${activeInfoTab === 'leaderboard'
-                                    ? 'info-panel--leaderboard'
-                                    : ''
-                                }`}
-                        >
+                        <section className={`info-panel ${activeInfoTab === 'leaderboard' ? 'info-panel--leaderboard' : ''}`}>
                             {/* Bandeau Top 3 (visible sauf en mode classement fusionné) */}
                             {activeInfoTab !== 'leaderboard' && (
                                 <div className="info-top3">
                                     <div className="info-top3-heading">
-                                        <h2 className="info-top3-title">
-                                            Top 3 joueurs
-                                        </h2>
-                                        <p className="info-top3-subtitle">
-                                            Basé sur les meilleurs gains en un
-                                            seul coup de casino.
-                                        </p>
+                                        <h2 className="info-top3-title">Top 3 joueurs</h2>
+                                        <p className="info-top3-subtitle">Basé sur les meilleurs gains en un seul coup de casino.</p>
                                     </div>
                                     <ol className="top3-list">
                                         {globalTop3.length === 0 ? (
-                                            <li className="top3-empty">
-                                                Aucun joueur global encore dans
-                                                le classement. Fonce 🎰
-                                            </li>
+                                            <li className="top3-empty">Aucun joueur global encore dans le classement. Fonce 🎰</li>
                                         ) : (
-                                            globalTop3.map(
-                                                (entry, index) => (
-                                                    <li
-                                                        key={entry.id}
-                                                        className={`top3-item top3-item--${index + 1
-                                                            }`}
-                                                    >
-                                                        <span className="top3-rank">
-                                                            {index === 0
-                                                                ? '👑'
-                                                                : index === 1
-                                                                    ? '🥈'
-                                                                    : '🥉'}
-                                                        </span>
-                                                        <div className="top3-text">
-                                                            <span className="top3-name">
-                                                                {entry.name}
-                                                            </span>
-                                                            <span className="top3-score">
-                                                                {formatNumber(
-                                                                    entry.score,
-                                                                    1,
-                                                                )}{' '}
-                                                                cookies
-                                                            </span>
-                                                        </div>
-                                                    </li>
-                                                ),
-                                            )
+                                            globalTop3.map((entry, index) => (
+                                                <li key={entry.id} className={`top3-item top3-item--${index + 1}`}>
+                                                    <span className="top3-rank">
+                                                        {index === 0 ? '👑' : index === 1 ? '🥈' : '🥉'}
+                                                    </span>
+                                                    <div className="top3-text">
+                                                        <span className="top3-name">{entry.name}</span>
+                                                        <span className="top3-score">{formatNumber(entry.score, 1)} cookies</span>
+                                                    </div>
+                                                </li>
+                                            ))
                                         )}
                                     </ol>
                                 </div>
@@ -2272,220 +1910,74 @@ function App() {
 
                             {/* Menu d'onglets */}
                             <div className="info-tabs">
-                                <button
-                                    type="button"
-                                    className={`info-tab ${activeInfoTab === 'upgrades'
-                                            ? 'info-tab--active'
-                                            : ''
-                                        }`}
-                                    onClick={() =>
-                                        setActiveInfoTab('upgrades')
-                                    }
-                                >
-                                    Améliorations
-                                </button>
-                                <button
-                                    type="button"
-                                    className={`info-tab ${activeInfoTab === 'achievements'
-                                            ? 'info-tab--active'
-                                            : ''
-                                        }`}
-                                    onClick={() =>
-                                        setActiveInfoTab('achievements')
-                                    }
-                                >
-                                    Succès
-                                </button>
-                                <button
-                                    type="button"
-                                    className={`info-tab ${activeInfoTab === 'leaderboard'
-                                            ? 'info-tab--active'
-                                            : ''
-                                        }`}
-                                    onClick={() =>
-                                        setActiveInfoTab('leaderboard')
-                                    }
-                                >
-                                    Classement général
-                                </button>
+                                <button type="button" className={`info-tab ${activeInfoTab === 'upgrades' ? 'info-tab--active' : ''}`} onClick={() => setActiveInfoTab('upgrades')}>Améliorations</button>
+                                <button type="button" className={`info-tab ${activeInfoTab === 'achievements' ? 'info-tab--active' : ''}`} onClick={() => setActiveInfoTab('achievements')}>Succès</button>
+                                <button type="button" className={`info-tab ${activeInfoTab === 'leaderboard' ? 'info-tab--active' : ''}`} onClick={() => setActiveInfoTab('leaderboard')}>Classement général</button>
                             </div>
 
                             {/* Contenu des onglets */}
-                            <div
-                                className={`info-content ${activeInfoTab === 'leaderboard'
-                                        ? 'info-content--leaderboard'
-                                        : ''
-                                    }`}
-                            >
+                            <div className={`info-content ${activeInfoTab === 'leaderboard' ? 'info-content--leaderboard' : ''}`}>
                                 {/* Onglet AMÉLIORATIONS */}
                                 {activeInfoTab === 'upgrades' && (
                                     <div className="info-upgrades">
                                         <p className="info-section-intro">
-                                            Investis tes cookies dans des boosts
-                                            permanents. Les bâtiments produisent
-                                            en continu, les clics deviennent
-                                            monstrueux.
+                                            Investis tes cookies dans des boosts permanents. Les bâtiments produisent en continu, les clics deviennent monstrueux.
                                         </p>
 
                                         <div className="upgrade-tabs">
-                                            {UPGRADE_CATEGORIES.map(
-                                                (category) => (
-                                                    <button
-                                                        key={category.id}
-                                                        type="button"
-                                                        className={`upgrade-tab${selectedUpgradeCategory ===
-                                                                category.id
-                                                                ? ' upgrade-tab--active'
-                                                                : ''
-                                                            }`}
-                                                        onClick={() =>
-                                                            setSelectedUpgradeCategory(
-                                                                category.id,
-                                                            )
-                                                        }
-                                                    >
-                                                        <span className="upgrade-tab-label">
-                                                            {category.label}
-                                                        </span>
-                                                        <span className="upgrade-tab-description">
-                                                            {
-                                                                category.description
-                                                            }
-                                                        </span>
-                                                    </button>
-                                                ),
-                                            )}
+                                            {UPGRADE_CATEGORIES.map((category) => (
+                                                <button
+                                                    key={category.id}
+                                                    type="button"
+                                                    className={`upgrade-tab${selectedUpgradeCategory === category.id ? ' upgrade-tab--active' : ''}`}
+                                                    onClick={() => setSelectedUpgradeCategory(category.id)}
+                                                >
+                                                    <span className="upgrade-tab-label">{category.label}</span>
+                                                    <span className="upgrade-tab-description">{category.description}</span>
+                                                </button>
+                                            ))}
                                         </div>
 
                                         <div className="shop-list-wrapper">
-                                            {UPGRADE_DEFINITIONS_BY_CATEGORY[
-                                                selectedUpgradeCategory
-                                            ].some(
-                                                (upgrade) =>
-                                                    game.totalCookies >=
-                                                    upgrade.unlockAt,
-                                            ) ? (
+                                            {UPGRADE_DEFINITIONS_BY_CATEGORY[selectedUpgradeCategory].some((upgrade) => game.totalCookies >= upgrade.unlockAt) ? (
                                                 <div className="shop-list">
-                                                    {UPGRADE_DEFINITIONS_BY_CATEGORY[
-                                                        selectedUpgradeCategory
-                                                    ]
-                                                        .filter(
-                                                            (upgrade) =>
-                                                                game.totalCookies >=
-                                                                upgrade.unlockAt,
-                                                        )
+                                                    {UPGRADE_DEFINITIONS_BY_CATEGORY[selectedUpgradeCategory]
+                                                        .filter((upgrade) => game.totalCookies >= upgrade.unlockAt)
                                                         .map((upgrade) => {
-                                                            const quantity =
-                                                                game.upgrades[
-                                                                upgrade.id
-                                                                ] ?? 0;
-                                                            const cost =
-                                                                upgrade.baseCost *
-                                                                Math.pow(
-                                                                    1.15,
-                                                                    quantity,
-                                                                );
-                                                            const affordable =
-                                                                game.cookies >=
-                                                                cost;
+                                                            const quantity = game.upgrades[upgrade.id] ?? 0;
+                                                            const cost = upgrade.baseCost * Math.pow(1.15, quantity);
+                                                            const affordable = game.cookies >= cost;
 
                                                             return (
                                                                 <button
-                                                                    key={
-                                                                        upgrade.id
-                                                                    }
+                                                                    key={upgrade.id}
                                                                     type="button"
-                                                                    className={`shop-item${affordable
-                                                                            ? ' shop-item--affordable'
-                                                                            : ''
-                                                                        }`}
-                                                                    onClick={() =>
-                                                                        handleBuyUpgrade(
-                                                                            upgrade,
-                                                                        )
-                                                                    }
-                                                                    disabled={
-                                                                        isLocked ||
-                                                                        !affordable
-                                                                    }
+                                                                    className={`shop-item${affordable ? ' shop-item--affordable' : ''}`}
+                                                                    onClick={() => handleBuyUpgrade(upgrade)}
+                                                                    disabled={isLocked || !affordable}
                                                                 >
                                                                     <div className="shop-item-main">
-                                                                        <div className="shop-item-icon">
-                                                                            {
-                                                                                upgrade.emoji
-                                                                            }
-                                                                        </div>
+                                                                        <div className="shop-item-icon">{upgrade.emoji}</div>
                                                                         <div className="shop-item-text">
-                                                                            <span className="shop-item-name">
-                                                                                {
-                                                                                    upgrade.name
-                                                                                }
-                                                                            </span>
-                                                                            <span className="shop-item-description">
-                                                                                {
-                                                                                    upgrade.description
-                                                                                }
-                                                                            </span>
+                                                                            <span className="shop-item-name">{upgrade.name}</span>
+                                                                            <span className="shop-item-description">{upgrade.description}</span>
                                                                             <div className="shop-item-effects">
-                                                                                {upgrade.cps >
-                                                                                    0 && (
-                                                                                        <span>
-                                                                                            +
-                                                                                            {
-                                                                                                upgrade.cps
-                                                                                            }{' '}
-                                                                                            /s
-                                                                                        </span>
-                                                                                    )}
-                                                                                {upgrade.clickBonus >
-                                                                                    0 && (
-                                                                                        <span>
-                                                                                            +
-                                                                                            {
-                                                                                                upgrade.clickBonus
-                                                                                            }{' '}
-                                                                                            par
-                                                                                            clic
-                                                                                        </span>
-                                                                                    )}
-                                                                                {upgrade.cps ===
-                                                                                    0 &&
-                                                                                    upgrade.clickBonus ===
-                                                                                    0 && (
-                                                                                        <span>
-                                                                                            Cosmétique
-                                                                                            uniquement
-                                                                                            ✨
-                                                                                        </span>
-                                                                                    )}
+                                                                                {upgrade.cps > 0 && <span>+{upgrade.cps} /s</span>}
+                                                                                {upgrade.clickBonus > 0 && <span>+{upgrade.clickBonus} par clic</span>}
+                                                                                {upgrade.cps === 0 && upgrade.clickBonus === 0 && <span>Cosmétique uniquement ✨</span>}
                                                                             </div>
                                                                         </div>
                                                                     </div>
                                                                     <div className="shop-item-meta">
-                                                                        <span className="shop-item-cost">
-                                                                            {formatNumber(
-                                                                                cost,
-                                                                                1,
-                                                                            )}{' '}
-                                                                            cookies
-                                                                        </span>
-                                                                        <span className="shop-item-qty">
-                                                                            x
-                                                                            {
-                                                                                quantity
-                                                                            }
-                                                                        </span>
+                                                                        <span className="shop-item-cost">{formatNumber(cost, 1)} cookies</span>
+                                                                        <span className="shop-item-qty">x{quantity}</span>
                                                                     </div>
                                                                 </button>
                                                             );
                                                         })}
                                                 </div>
                                             ) : (
-                                                <p className="shop-empty">
-                                                    Clique encore un peu pour
-                                                    débloquer des améliorations
-                                                    dans cette catégorie. 💡
-                                                </p>
+                                                <p className="shop-empty">Clique encore un peu pour débloquer des améliorations dans cette catégorie. 💡</p>
                                             )}
                                         </div>
                                     </div>
@@ -2496,42 +1988,21 @@ function App() {
                                     <div className="info-achievements">
                                         <div className="info-achievements-header">
                                             <h3>Succès</h3>
-                                            <p className="achievements-count">
-                                                {unlockedAchievements.length} /{' '}
-                                                {ACHIEVEMENTS.length} débloqués
-                                            </p>
+                                            <p className="achievements-count">{unlockedAchievements.length} / {ACHIEVEMENTS.length} débloqués</p>
                                         </div>
                                         <p className="info-section-intro">
-                                            Débloque des succès en cliquant,
-                                            investissant et en testant le
-                                            casino. Rien n’est monétisé, c’est
-                                            juste pour le fun et le challenge.
+                                            Débloque des succès en cliquant, investissant et en testant le casino. Rien n’est monétisé, c’est juste pour le fun et le challenge.
                                         </p>
 
                                         <div className="achievements-list">
                                             {ACHIEVEMENTS.map((ach) => {
-                                                const unlocked =
-                                                    unlockedAchievementIds.has(
-                                                        ach.id,
-                                                    );
+                                                const unlocked = unlockedAchievementIds.has(ach.id);
                                                 return (
-                                                    <div
-                                                        key={ach.id}
-                                                        className={`achievement ${unlocked
-                                                                ? 'achievement--unlocked'
-                                                                : 'achievement--locked'
-                                                            }`}
-                                                    >
+                                                    <div key={ach.id} className={`achievement ${unlocked ? 'achievement--unlocked' : 'achievement--locked'}`}>
                                                         <span className="achievement-dot" />
                                                         <div className="achievement-text">
-                                                            <span className="achievement-label">
-                                                                {ach.label}
-                                                            </span>
-                                                            <span className="achievement-description">
-                                                                {
-                                                                    ach.description
-                                                                }
-                                                            </span>
+                                                            <span className="achievement-label">{ach.label}</span>
+                                                            <span className="achievement-description">{ach.description}</span>
                                                         </div>
                                                     </div>
                                                 );
@@ -2544,79 +2015,34 @@ function App() {
                                 {activeInfoTab === 'leaderboard' && (
                                     <div className="info-leaderboard">
                                         <div className="leaderboard-top3-block">
-                                            <h3 className="leaderboard-title">
-                                                Classement global du casino
-                                            </h3>
-                                            <p className="leaderboard-subtitle">
-                                                Basé sur le meilleur gain en un
-                                                seul coup (roue, lootbox ou
-                                                high roll).
-                                            </p>
+                                            <h3 className="leaderboard-title">Classement global du casino</h3>
+                                            <p className="leaderboard-subtitle">Basé sur le meilleur gain en un seul coup (roue, lootbox ou high roll).</p>
 
                                             <div className="leaderboard-podium">
                                                 <div className="podium-column podium-column--silver">
                                                     {globalTop3[1] && (
                                                         <>
-                                                            <span className="podium-rank">
-                                                                🥈
-                                                            </span>
-                                                            <span className="podium-name">
-                                                                {
-                                                                    globalTop3[1]
-                                                                        .name
-                                                                }
-                                                            </span>
-                                                            <span className="podium-score">
-                                                                {formatNumber(
-                                                                    globalTop3[1]
-                                                                        .score,
-                                                                    1,
-                                                                )}
-                                                            </span>
+                                                            <span className="podium-rank">🥈</span>
+                                                            <span className="podium-name">{globalTop3[1].name}</span>
+                                                            <span className="podium-score">{formatNumber(globalTop3[1].score, 1)}</span>
                                                         </>
                                                     )}
                                                 </div>
                                                 <div className="podium-column podium-column--gold">
                                                     {globalTop3[0] && (
                                                         <>
-                                                            <span className="podium-rank">
-                                                                🥇
-                                                            </span>
-                                                            <span className="podium-name">
-                                                                {
-                                                                    globalTop3[0]
-                                                                        .name
-                                                                }
-                                                            </span>
-                                                            <span className="podium-score">
-                                                                {formatNumber(
-                                                                    globalTop3[0]
-                                                                        .score,
-                                                                    1,
-                                                                )}
-                                                            </span>
+                                                            <span className="podium-rank">🥇</span>
+                                                            <span className="podium-name">{globalTop3[0].name}</span>
+                                                            <span className="podium-score">{formatNumber(globalTop3[0].score, 1)}</span>
                                                         </>
                                                     )}
                                                 </div>
                                                 <div className="podium-column podium-column--bronze">
                                                     {globalTop3[2] && (
                                                         <>
-                                                            <span className="podium-rank">
-                                                                🥉
-                                                            </span>
-                                                            <span className="podium-name">
-                                                                {
-                                                                    globalTop3[2]
-                                                                        .name
-                                                                }
-                                                            </span>
-                                                            <span className="podium-score">
-                                                                {formatNumber(
-                                                                    globalTop3[2]
-                                                                        .score,
-                                                                    1,
-                                                                )}
-                                                            </span>
+                                                            <span className="podium-rank">🥉</span>
+                                                            <span className="podium-name">{globalTop3[2].name}</span>
+                                                            <span className="podium-score">{formatNumber(globalTop3[2].score, 1)}</span>
                                                         </>
                                                     )}
                                                 </div>
@@ -2625,164 +2051,57 @@ function App() {
 
                                         <div className="leaderboard-scroll">
                                             <div className="leaderboard-block">
-                                                <h4 className="leaderboard-block-title">
-                                                    Suite du classement global
-                                                </h4>
+                                                <h4 className="leaderboard-block-title">Suite du classement global</h4>
                                                 {globalRest.length === 0 ? (
-                                                    <p className="leaderboard-empty">
-                                                        Personne d&apos;autre
-                                                        n&apos;a encore percé
-                                                        le classement global.
-                                                    </p>
+                                                    <p className="leaderboard-empty">Personne d&apos;autre n&apos;a encore percé le classement global.</p>
                                                 ) : (
                                                     <ul className="leaderboard-list">
-                                                        {globalRest.map(
-                                                            (
-                                                                entry,
-                                                                index,
-                                                            ) => (
-                                                                <li
-                                                                    key={
-                                                                        entry.id
-                                                                    }
-                                                                    className="leaderboard-row"
-                                                                >
-                                                                    <span className="leaderboard-rank">
-                                                                        #
-                                                                        {index +
-                                                                            4}
-                                                                    </span>
-                                                                    <span className="leaderboard-name">
-                                                                        {
-                                                                            entry.name
-                                                                        }
-                                                                    </span>
-                                                                    <span className="leaderboard-amount">
-                                                                        {formatNumber(
-                                                                            entry.score,
-                                                                            1,
-                                                                        )}
-                                                                    </span>
-                                                                </li>
-                                                            ),
-                                                        )}
+                                                        {globalRest.map((entry, index) => (
+                                                            <li key={entry.id} className="leaderboard-row">
+                                                                <span className="leaderboard-rank">#{index + 4}</span>
+                                                                <span className="leaderboard-name">{entry.name}</span>
+                                                                <span className="leaderboard-amount">{formatNumber(entry.score, 1)}</span>
+                                                            </li>
+                                                        ))}
                                                     </ul>
                                                 )}
                                             </div>
 
                                             <div className="leaderboard-block">
-                                                <h4 className="leaderboard-block-title">
-                                                    Top gains du jour (local)
-                                                </h4>
+                                                <h4 className="leaderboard-block-title">Top gains du jour (local)</h4>
                                                 {todayTopWins.length === 0 ? (
-                                                    <p className="leaderboard-empty">
-                                                        Aucun gros gain local
-                                                        aujourd&apos;hui. À toi
-                                                        de jouer ✨
-                                                    </p>
+                                                    <p className="leaderboard-empty">Aucun gros gain local aujourd&apos;hui. À toi de jouer ✨</p>
                                                 ) : (
                                                     <ul className="leaderboard-list">
-                                                        {todayTopWins.map(
-                                                            (
-                                                                entry,
-                                                                index,
-                                                            ) => (
-                                                                <li
-                                                                    key={
-                                                                        entry.id
-                                                                    }
-                                                                    className="leaderboard-row"
-                                                                >
-                                                                    <span className="leaderboard-rank">
-                                                                        #
-                                                                        {index +
-                                                                            1}
-                                                                    </span>
-                                                                    <span className="leaderboard-name">
-                                                                        {
-                                                                            entry.playerName
-                                                                        }
-                                                                    </span>
-                                                                    <span className="leaderboard-amount">
-                                                                        {formatNumber(
-                                                                            entry.amount,
-                                                                            1,
-                                                                        )}
-                                                                    </span>
-                                                                    <span className="leaderboard-source">
-                                                                        {entry.source ===
-                                                                            'wheel'
-                                                                            ? 'Roue'
-                                                                            : entry.source ===
-                                                                                'case'
-                                                                                ? 'Caisse'
-                                                                                : 'High roll'}
-                                                                    </span>
-                                                                </li>
-                                                            ),
-                                                        )}
+                                                        {todayTopWins.map((entry, index) => (
+                                                            <li key={entry.id} className="leaderboard-row">
+                                                                <span className="leaderboard-rank">#{index + 1}</span>
+                                                                <span className="leaderboard-name">{entry.playerName}</span>
+                                                                <span className="leaderboard-amount">{formatNumber(entry.amount, 1)}</span>
+                                                                <span className="leaderboard-source">{entry.source === 'wheel' ? 'Roue' : entry.source === 'case' ? 'Caisse' : 'High roll'}</span>
+                                                            </li>
+                                                        ))}
                                                     </ul>
                                                 )}
                                             </div>
 
                                             <div className="leaderboard-block">
-                                                <h4 className="leaderboard-block-title">
-                                                    Records absolus (local)
-                                                </h4>
-                                                {allTimeTopWins.length ===
-                                                    0 ? (
-                                                    <p className="leaderboard-empty">
-                                                        Pas encore de record
-                                                        enregistré sur ce
-                                                        navigateur.
-                                                    </p>
+                                                <h4 className="leaderboard-block-title">Records absolus (local)</h4>
+                                                {allTimeTopWins.length === 0 ? (
+                                                    <p className="leaderboard-empty">Pas encore de record enregistré sur ce navigateur.</p>
                                                 ) : (
                                                     <ul className="leaderboard-list">
-                                                        {allTimeTopWins.map(
-                                                            (
-                                                                entry,
-                                                                index,
-                                                            ) => (
-                                                                <li
-                                                                    key={
-                                                                        entry.id
-                                                                    }
-                                                                    className="leaderboard-row"
-                                                                >
-                                                                    <span className="leaderboard-rank">
-                                                                        #
-                                                                        {index +
-                                                                            1}
-                                                                    </span>
-                                                                    <span className="leaderboard-name">
-                                                                        {
-                                                                            entry.playerName
-                                                                        }
-                                                                    </span>
-                                                                    <span className="leaderboard-amount">
-                                                                        {formatNumber(
-                                                                            entry.amount,
-                                                                            1,
-                                                                        )}
-                                                                    </span>
-                                                                    <span className="leaderboard-source">
-                                                                        {entry.source ===
-                                                                            'wheel'
-                                                                            ? 'Roue'
-                                                                            : entry.source ===
-                                                                                'case'
-                                                                                ? 'Caisse'
-                                                                                : 'High roll'}
-                                                                    </span>
-                                                                </li>
-                                                            ),
-                                                        )}
+                                                        {allTimeTopWins.map((entry, index) => (
+                                                            <li key={entry.id} className="leaderboard-row">
+                                                                <span className="leaderboard-rank">#{index + 1}</span>
+                                                                <span className="leaderboard-name">{entry.playerName}</span>
+                                                                <span className="leaderboard-amount">{formatNumber(entry.amount, 1)}</span>
+                                                                <span className="leaderboard-source">{entry.source === 'wheel' ? 'Roue' : entry.source === 'case' ? 'Caisse' : 'High roll'}</span>
+                                                            </li>
+                                                        ))}
                                                     </ul>
                                                 )}
-                                                <p className="leaderboard-note">
-                                                    Classement stocké uniquement
-                                                    dans ton navigateur.
-                                                </p>
+                                                <p className="leaderboard-note">Classement stocké uniquement dans ton navigateur.</p>
                                             </div>
                                         </div>
                                     </div>
@@ -2796,28 +2115,19 @@ function App() {
                 <section className="casino-section">
                     <header className="casino-header">
                         <div>
-                            <h2 className="section-title">
-                                Casino des cookies
-                            </h2>
+                            <h2 className="section-title">Casino des cookies</h2>
                             <p className="section-subtitle">
-                                Roue, lootboxes et coups de poker. L&apos;espérance
-                                est légèrement contre toi : parie uniquement
-                                pour t&apos;amuser.
+                                Roue, lootboxes et coups de poker. L&apos;espérance est légèrement contre toi : parie uniquement pour t&apos;amuser.
                             </p>
                         </div>
                     </header>
 
                     <div className="casino-grid">
                         {/* Roue de la chance */}
-                        <div
-                            className={`casino-card casino-card--wheel ${hasNeonFx ? 'casino-card--neon' : ''
-                                }`}
-                        >
+                        <div className={`casino-card casino-card--wheel ${hasNeonFx ? 'casino-card--neon' : ''}`}>
                             <div className="casino-card-header">
                                 <h3>Roue de la chance</h3>
-                                <p className="casino-helper">
-                                    Mise min. {MIN_WHEEL_BET} cookies
-                                </p>
+                                <p className="casino-helper">Mise min. {MIN_WHEEL_BET} cookies</p>
                             </div>
 
                             <div className="wheel-controls">
@@ -2826,189 +2136,85 @@ function App() {
                                     className="wheel-input"
                                     min={MIN_WHEEL_BET}
                                     value={wheelBet}
-                                    onChange={(
-                                        e: React.ChangeEvent<HTMLInputElement>,
-                                    ) =>
-                                        setWheelBet(
-                                            Math.max(
-                                                MIN_WHEEL_BET,
-                                                Number(e.target.value) || 0,
-                                            ),
-                                        )
+                                    onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                                        setWheelBet(Math.max(MIN_WHEEL_BET, Number(e.target.value) || 0))
                                     }
                                 />
                                 <button
                                     type="button"
                                     className="primary-button"
                                     onClick={handleWheelSpin}
-                                    disabled={
-                                        isLocked ||
-                                        isWheelSpinning ||
-                                        game.cookies < MIN_WHEEL_BET
-                                    }
+                                    disabled={isLocked || isWheelSpinning || game.cookies < MIN_WHEEL_BET}
                                 >
-                                    {isWheelSpinning
-                                        ? 'La roue tourne...'
-                                        : 'Spin 🎰'}
+                                    {isWheelSpinning ? 'La roue tourne...' : 'Spin 🎰'}
                                 </button>
                             </div>
                             {lastWheelResult && (
                                 <p className="casino-last-result">
-                                    Résultat : {lastWheelResult.label} ·{' '}
-                                    {lastWheelResult.delta >= 0 ? '+' : ''}
-                                    {formatNumber(
-                                        lastWheelResult.delta,
-                                        1,
-                                    )}{' '}
-                                    cookies
-                                    {lastWheelResult.buffLabel && (
-                                        <>
-                                            {' · '}Buff :{' '}
-                                            {lastWheelResult.buffLabel}
-                                        </>
-                                    )}
+                                    Résultat : {lastWheelResult.label} · {lastWheelResult.delta >= 0 ? '+' : ''}
+                                    {formatNumber(lastWheelResult.delta, 1)} cookies
+                                    {lastWheelResult.buffLabel && <> {' · '}Buff : {lastWheelResult.buffLabel}</>}
                                 </p>
                             )}
                         </div>
 
                         {/* Lootboxes */}
-                        <div
-                            className={`casino-card casino-card--cases ${hasNeonFx ? 'casino-card--neon' : ''
-                                }`}
-                        >
+                        <div className={`casino-card casino-card--cases ${hasNeonFx ? 'casino-card--neon' : ''}`}>
                             <div className="casino-card-header">
                                 <h3>Lootboxes</h3>
-                                <p className="casino-helper">
-                                    Des boîtes surprises plus ou moins risquées.
-                                </p>
+                                <p className="casino-helper">Des boîtes surprises plus ou moins risquées.</p>
                             </div>
 
                             <div className="cases-list">
                                 {CASE_DEFINITIONS.map((c) => {
-                                    const disabled =
-                                        isLocked ||
-                                        game.cookies < c.cost ||
-                                        openingCaseId === c.id;
+                                    const disabled = isLocked || game.cookies < c.cost || openingCaseId === c.id;
                                     const opening = openingCaseId === c.id;
 
                                     return (
-                                        <button
-                                            key={c.id}
-                                            type="button"
-                                            className={`case-card ${disabled
-                                                    ? 'case-card--disabled'
-                                                    : ''
-                                                }`}
-                                            disabled={disabled}
-                                            onClick={() => handleOpenCase(c)}
-                                        >
+                                        <button key={c.id} type="button" className={`case-card ${disabled ? 'case-card--disabled' : ''}`} disabled={disabled} onClick={() => handleOpenCase(c)}>
                                             <div className="case-main">
-                                                <span className="case-emoji">
-                                                    {c.emoji}
-                                                </span>
+                                                <span className="case-emoji">{c.emoji}</span>
                                                 <div>
-                                                    <div className="case-name">
-                                                        {c.name}
-                                                    </div>
-                                                    <div className="case-desc">
-                                                        {c.description}
-                                                    </div>
+                                                    <div className="case-name">{c.name}</div>
+                                                    <div className="case-desc">{c.description}</div>
                                                 </div>
                                             </div>
                                             <div className="case-meta">
-                                                <span>
-                                                    Coût :{' '}
-                                                    {formatNumber(c.cost, 0)}
-                                                </span>
-                                                <span>
-                                                    Jack :{' '}
-                                                    {c.jackpotMultiplier}x (
-                                                    {Math.round(
-                                                        c.jackpotChance * 100,
-                                                    )}
-                                                    %)
-                                                </span>
+                                                <span>Coût : {formatNumber(c.cost, 0)}</span>
+                                                <span>Jack : {c.jackpotMultiplier}x ({Math.round(c.jackpotChance * 100)}%)</span>
                                             </div>
-                                            {opening && (
-                                                <div className="case-opening">
-                                                    Ouverture...
-                                                </div>
-                                            )}
+                                            {opening && <div className="case-opening">Ouverture...</div>}
                                         </button>
                                     );
                                 })}
                             </div>
                             {lastCaseResult && (
                                 <p className="casino-last-result">
-                                    Dernière caisse :{' '}
-                                    {lastCaseResult.caseName} ·{' '}
-                                    {lastCaseResult.isJackpot
-                                        ? 'JACKPOT 🎉 '
-                                        : lastCaseResult.isLoss
-                                            ? 'Aïe... 😬 '
-                                            : ''}
+                                    Dernière caisse : {lastCaseResult.caseName} · {lastCaseResult.isJackpot ? 'JACKPOT 🎉 ' : lastCaseResult.isLoss ? 'Aïe... 😬 ' : ''}
                                     {lastCaseResult.reward >= 0 ? '+' : ''}
-                                    {formatNumber(
-                                        lastCaseResult.reward,
-                                        1,
-                                    )}{' '}
-                                    cookies
+                                    {formatNumber(lastCaseResult.reward, 1)} cookies
                                 </p>
                             )}
                         </div>
 
                         {/* High roll */}
-                        <div
-                            className={`casino-card casino-card--highroll ${hasNeonFx ? 'casino-card--neon' : ''
-                                }`}
-                        >
+                        <div className={`casino-card casino-card--highroll ${hasNeonFx ? 'casino-card--neon' : ''}`}>
                             <div className="casino-card-header">
                                 <h3>Coup de poker</h3>
-                                <p className="casino-helper">
-                                    Mise élevée ou ALL-IN. Les chances ne sont
-                                    pas de ton côté. 💀
-                                </p>
+                                <p className="casino-helper">Mise élevée ou ALL-IN. Les chances ne sont pas de ton côté. 💀</p>
                             </div>
 
                             <div className="highroll-actions">
-                                <button
-                                    type="button"
-                                    className="secondary-button"
-                                    disabled={isLocked || game.cookies < 1_000}
-                                    onClick={() => handleHighRoll(false)}
-                                >
+                                <button type="button" className="secondary-button" disabled={isLocked || game.cookies < 1_000} onClick={() => handleHighRoll(false)}>
                                     Mise forte
                                 </button>
-                                <button
-                                    type="button"
-                                    className="danger-button"
-                                    disabled={isLocked || game.cookies < 1_000}
-                                    onClick={() => handleHighRoll(true)}
-                                >
+                                <button type="button" className="danger-button" disabled={isLocked || game.cookies < 1_000} onClick={() => handleHighRoll(true)}>
                                     ALL-IN 💀
                                 </button>
                             </div>
                             {lastHighRoll && (
                                 <p className="casino-last-result">
-                                    {lastHighRoll.allIn
-                                        ? 'ALL-IN'
-                                        : 'Mise'}{' '}
-                                    :{' '}
-                                    {formatNumber(
-                                        lastHighRoll.bet,
-                                        1,
-                                    )}{' '}
-                                    ·{' '}
-                                    {lastHighRoll.outcome === 'win'
-                                        ? 'Victoire 🎉'
-                                        : 'Défaite 😬'}{' '}
-                                    (
-                                    {lastHighRoll.delta >= 0 ? '+' : ''}
-                                    {formatNumber(
-                                        lastHighRoll.delta,
-                                        1,
-                                    )}{' '}
-                                    cookies)
+                                    {lastHighRoll.allIn ? 'ALL-IN' : 'Mise'} : {formatNumber(lastHighRoll.bet, 1)} · {lastHighRoll.outcome === 'win' ? 'Victoire 🎉' : 'Défaite 😬'} ({lastHighRoll.delta >= 0 ? '+' : ''}{formatNumber(lastHighRoll.delta, 1)} cookies)
                                 </p>
                             )}
                         </div>
@@ -3019,46 +2225,27 @@ function App() {
                         <div className="casino-stats-grid">
                             <div className="casino-stat">
                                 <span>Roue jouée</span>
-                                <strong>
-                                    {game.gamblingStats.spinsPlayed} fois
-                                </strong>
+                                <strong>{game.gamblingStats.spinsPlayed} fois</strong>
                             </div>
                             <div className="casino-stat">
                                 <span>Lootboxes ouvertes</span>
-                                <strong>
-                                    {game.gamblingStats.casesOpened}
-                                </strong>
+                                <strong>{game.gamblingStats.casesOpened}</strong>
                             </div>
                             <div className="casino-stat">
                                 <span>High rolls</span>
-                                <strong>
-                                    {game.gamblingStats.highRollPlays}
-                                </strong>
+                                <strong>{game.gamblingStats.highRollPlays}</strong>
                             </div>
                             <div className="casino-stat">
                                 <span>All-in tentés</span>
-                                <strong>
-                                    {game.gamblingStats.allInCount}
-                                </strong>
+                                <strong>{game.gamblingStats.allInCount}</strong>
                             </div>
                             <div className="casino-stat">
                                 <span>Série de pertes max</span>
-                                <strong>
-                                    {
-                                        game.gamblingStats
-                                            .maxConsecutiveLosses
-                                    }
-                                </strong>
+                                <strong>{game.gamblingStats.maxConsecutiveLosses}</strong>
                             </div>
                             <div className="casino-stat">
                                 <span>Meilleur coup</span>
-                                <strong>
-                                    {formatNumber(
-                                        game.gamblingStats.biggestWin,
-                                        1,
-                                    )}{' '}
-                                    cookies
-                                </strong>
+                                <strong>{formatNumber(game.gamblingStats.biggestWin, 1)} cookies</strong>
                             </div>
                         </div>
                     </div>
@@ -3067,139 +2254,54 @@ function App() {
 
             {!currentUser && !isAuthPanelOpen && !isAuthNudgeDismissed && (
                 <div className="auth-nudge">
-                    <button
-                        type="button"
-                        className="auth-nudge__close"
-                        aria-label="Fermer le rappel d'inscription"
-                        onClick={() => setIsAuthNudgeDismissed(true)}
-                    >
-                        ✕
-                    </button>
-            {!currentUser && !isAuthPanelOpen && (
-                <div className="auth-nudge">
+                    <button type="button" className="auth-nudge__close" aria-label="Fermer le rappel d'inscription" onClick={() => setIsAuthNudgeDismissed(true)}>✕</button>
                     <div>
-                        <div className="auth-nudge__title">
-                            Connecte-toi pour jouer
-                        </div>
-                        <div className="auth-nudge__text">
-                            Tes clics, upgrades et paris nécessitent un compte
-                            gratuit.
-                        </div>
+                        <div className="auth-nudge__title">Connecte-toi pour jouer</div>
+                        <div className="auth-nudge__text">Tes clics, upgrades et paris nécessitent un compte gratuit.</div>
                     </div>
-                    <button
-                        type="button"
-                        className="primary-button auth-nudge__button"
-                        onClick={() => setIsAuthPanelOpen(true)}
-                    >
-                        Ouvrir
-                    </button>
+                    <button type="button" className="primary-button auth-nudge__button" onClick={() => setIsAuthPanelOpen(true)}>Ouvrir</button>
                 </div>
             )}
 
-            <div
-                className={`auth-widget ${
-                    isAuthPanelOpen ? 'auth-widget--open' : ''
-                }`}
-            >
+            <div className={`auth-widget ${isAuthPanelOpen ? 'auth-widget--open' : ''}`}>
                 <div className="auth-widget__header">
                     <div>
-                        <div className="auth-widget__title">
-                            {currentUser
-                                ? 'Profil & sauvegarde cloud'
-                                : 'Connexion / inscription'}
-                        </div>
-                        <div className="auth-widget__subtitle">
-                            {currentUser
-                                ? 'Gère ton pseudo et ta sauvegarde sécurisée.'
-                                : 'Aucun jeu hors ligne : connecte-toi pour cliquer et jouer.'}
-                        </div>
+                        <div className="auth-widget__title">{currentUser ? 'Profil & sauvegarde cloud' : 'Connexion / inscription'}</div>
+                        <div className="auth-widget__subtitle">{currentUser ? 'Gère ton pseudo et ta sauvegarde sécurisée.' : 'Aucun jeu hors ligne : connecte-toi pour cliquer et jouer.'}</div>
                     </div>
-                    <button
-                        type="button"
-                        className="ghost-button auth-widget__close"
-                        onClick={() => setIsAuthPanelOpen(false)}
-                    >
-                        ✕
-                    </button>
+                    <button type="button" className="ghost-button auth-widget__close" onClick={() => setIsAuthPanelOpen(false)}>✕</button>
                 </div>
 
                 <div className="auth-widget__body">
                     <div className="auth-widget__inputs">
-                        <input
-                            className="auth-input"
-                            type="email"
-                            placeholder="Email"
-                            value={authEmail}
-                            onChange={(e) => setAuthEmail(e.target.value)}
-                        />
-                        <input
-                            className="auth-input"
-                            type="password"
-                            placeholder="Mot de passe"
-                            value={authPassword}
-                            onChange={(e) => setAuthPassword(e.target.value)}
-                        />
+                        <input className="auth-input" type="email" placeholder="Email" value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} />
+                        <input className="auth-input" type="password" placeholder="Mot de passe" value={authPassword} onChange={(e) => setAuthPassword(e.target.value)} />
                     </div>
 
                     <div className="auth-widget__actions">
-                        <button
-                            type="button"
-                            className="primary-button"
-                            onClick={handleLogin}
-                            disabled={!authEmail || !authPassword}
-                        >
-                            Connexion
-                        </button>
-                        <button
-                            type="button"
-                            className="secondary-button"
-                            onClick={handleSignup}
-                            disabled={!authEmail || !authPassword}
-                        >
-                            Créer un compte
-                        </button>
-                        <button
-                            type="button"
-                            className="ghost-button"
-                            onClick={handlePasswordReset}
-                            disabled={!authEmail}
-                        >
-                            Mot de passe oublié
-                        </button>
+                        <button type="button" className="primary-button" onClick={handleLogin} disabled={!authEmail || !authPassword}>Connexion</button>
+                        <button type="button" className="secondary-button" onClick={handleSignup} disabled={!authEmail || !authPassword}>Créer un compte</button>
+                        <button type="button" className="ghost-button" onClick={handlePasswordReset} disabled={!authEmail}>Mot de passe oublié</button>
                     </div>
 
                     <div className="auth-widget__status">{authMessage}</div>
 
                     {currentUser && (
                         <>
-                            <div className="auth-widget__cloud">
-                                <button
-                                    type="button"
-                                    className="ghost-button"
-                                    onClick={() => handleCloudSave(false)}
-                                >
-                                    Sauvegarde cloud
-                                </button>
-                                <button
-                                    type="button"
-                                    className="ghost-button"
-                                    onClick={handleCloudLoad}
-                                >
-                                    Charger depuis le cloud
-                                </button>
-                                <button
-                                    type="button"
-                                    className="ghost-button ghost-button--danger"
-                                    onClick={handleLogout}
-                                >
-                                    Se déconnecter
-                                </button>
-                            </div>
-                            {cloudMessage && (
-                                <div className="auth-widget__status">
-                                    {cloudMessage}
+                            <div className="auth-widget__profile">
+                                <div className="auth-widget__label">Pseudo public</div>
+                                <div className="auth-widget__name-row">
+                                    <input className="auth-input" type="text" maxLength={16} value={playerNameDraft} onChange={(e) => setPlayerNameDraft(e.target.value)} />
+                                    <button type="button" className="ghost-button" onClick={handleSavePlayerName} disabled={!playerNameDraft.trim()}>Mettre à jour</button>
                                 </div>
-                            )}
+                            </div>
+
+                            <div className="auth-widget__cloud">
+                                <button type="button" className="ghost-button" onClick={() => handleCloudSave(false)}>Sauvegarde cloud</button>
+                                <button type="button" className="ghost-button" onClick={handleCloudLoad}>Charger depuis le cloud</button>
+                                <button type="button" className="ghost-button ghost-button--danger" onClick={handleLogout}>Se déconnecter</button>
+                            </div>
+                            {cloudMessage && <div className="auth-widget__status">{cloudMessage}</div>}
                         </>
                     )}
                 </div>
@@ -3210,169 +2312,14 @@ function App() {
                 <div className="modal-backdrop">
                     <div className="modal-card">
                         <h2>Choisis ton pseudo</h2>
-                        <p>
-                            Il sera utilisé pour le classement local et global.
-                            Tu pourras le modifier plus tard.
-                        </p>
-                        <input
-                            type="text"
-                            maxLength={16}
-                            className="modal-input"
-                            value={playerNameDraft}
-                            onChange={(
-                                e: React.ChangeEvent<HTMLInputElement>,
-                            ) => setPlayerNameDraft(e.target.value)}
-                        />
+                        <p>Il sera utilisé pour le classement local et global. Tu pourras le modifier plus tard.</p>
+                        <input type="text" maxLength={16} className="modal-input" value={playerNameDraft} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPlayerNameDraft(e.target.value)} />
                         <div className="modal-actions">
-                            <button
-                                type="button"
-                                className="primary-button"
-                                onClick={handleSavePlayerName}
-                            >
-                                Valider
-                            </button>
+                            <button type="button" className="primary-button" onClick={handleSavePlayerName}>Valider</button>
                         </div>
                     </div>
-                    <button
-                        type="button"
-                        className="primary-button auth-nudge__button"
-                        onClick={() => setIsAuthPanelOpen(true)}
-                    >
-                        Ouvrir
-                    </button>
                 </div>
             )}
-
-            <div
-                className={`auth-widget ${
-                    isAuthPanelOpen ? 'auth-widget--open' : ''
-                }`}
-            >
-                <div className="auth-widget__header">
-                    <div>
-                        <div className="auth-widget__title">
-                            {currentUser
-                                ? 'Profil & sauvegarde cloud'
-                                : 'Connexion / inscription'}
-                        </div>
-                        <div className="auth-widget__subtitle">
-                            {currentUser
-                                ? 'Gère ton pseudo et ta sauvegarde sécurisée.'
-                                : 'Aucun jeu hors ligne : connecte-toi pour cliquer et jouer.'}
-                        </div>
-                    </div>
-                    <button
-                        type="button"
-                        className="ghost-button auth-widget__close"
-                        onClick={() => setIsAuthPanelOpen(false)}
-                    >
-                        ✕
-                    </button>
-                </div>
-
-                <div className="auth-widget__body">
-                    <div className="auth-widget__inputs">
-                        <input
-                            className="auth-input"
-                            type="email"
-                            placeholder="Email"
-                            value={authEmail}
-                            onChange={(e) => setAuthEmail(e.target.value)}
-                        />
-                        <input
-                            className="auth-input"
-                            type="password"
-                            placeholder="Mot de passe"
-                            value={authPassword}
-                            onChange={(e) => setAuthPassword(e.target.value)}
-                        />
-                    </div>
-
-                    <div className="auth-widget__actions">
-                        <button
-                            type="button"
-                            className="primary-button"
-                            onClick={handleLogin}
-                            disabled={!authEmail || !authPassword}
-                        >
-                            Connexion
-                        </button>
-                        <button
-                            type="button"
-                            className="secondary-button"
-                            onClick={handleSignup}
-                            disabled={!authEmail || !authPassword}
-                        >
-                            Créer un compte
-                        </button>
-                        <button
-                            type="button"
-                            className="ghost-button"
-                            onClick={handlePasswordReset}
-                            disabled={!authEmail}
-                        >
-                            Mot de passe oublié
-                        </button>
-                    </div>
-
-                    <div className="auth-widget__status">{authMessage}</div>
-
-                    {currentUser && (
-                        <>
-                            <div className="auth-widget__profile">
-                                <div className="auth-widget__label">Pseudo public</div>
-                                <div className="auth-widget__name-row">
-                                    <input
-                                        className="auth-input"
-                                        type="text"
-                                        maxLength={16}
-                                        value={playerNameDraft}
-                                        onChange={(e) =>
-                                            setPlayerNameDraft(e.target.value)
-                                        }
-                                    />
-                                    <button
-                                        type="button"
-                                        className="ghost-button"
-                                        onClick={handleSavePlayerName}
-                                        disabled={!playerNameDraft.trim()}
-                                    >
-                                        Mettre à jour
-                                    </button>
-                                </div>
-                            </div>
-                            <div className="auth-widget__cloud">
-                                <button
-                                    type="button"
-                                    className="ghost-button"
-                                    onClick={() => handleCloudSave(false)}
-                                >
-                                    Sauvegarde cloud
-                                </button>
-                                <button
-                                    type="button"
-                                    className="ghost-button"
-                                    onClick={handleCloudLoad}
-                                >
-                                    Charger depuis le cloud
-                                </button>
-                                <button
-                                    type="button"
-                                    className="ghost-button ghost-button--danger"
-                                    onClick={handleLogout}
-                                >
-                                    Se déconnecter
-                                </button>
-                            </div>
-                            {cloudMessage && (
-                                <div className="auth-widget__status">
-                                    {cloudMessage}
-                                </div>
-                            )}
-                        </>
-                    )}
-                </div>
-            </div>
 
             {/* Overlay résultat casino */}
             {overlay && (
@@ -3382,30 +2329,10 @@ function App() {
                             <>
                                 <h2>Résultat de la roue</h2>
                                 <p className="overlay-main">
-                                    {overlay.result.label} · Mise :{' '}
-                                    {formatNumber(
-                                        overlay.result.spent,
-                                        1,
-                                    )}{' '}
-                                    · Gain net :{' '}
-                                    {overlay.result.delta >= 0 ? '+' : ''}
-                                    {formatNumber(
-                                        overlay.result.delta,
-                                        1,
-                                    )}{' '}
-                                    cookies
+                                    {overlay.result.label} · Mise : {formatNumber(overlay.result.spent, 1)} · Gain net : {overlay.result.delta >= 0 ? '+' : ''}{formatNumber(overlay.result.delta, 1)} cookies
                                 </p>
-                                {overlay.result.isJackpot && (
-                                    <p className="overlay-sub">
-                                        🎉 JACKPOT de cookies !
-                                    </p>
-                                )}
-                                {overlay.result.buffLabel && (
-                                    <p className="overlay-sub">
-                                        Buff obtenu :{' '}
-                                        {overlay.result.buffLabel}
-                                    </p>
-                                )}
+                                {overlay.result.isJackpot && <p className="overlay-sub">🎉 JACKPOT de cookies !</p>}
+                                {overlay.result.buffLabel && <p className="overlay-sub">Buff obtenu : {overlay.result.buffLabel}</p>}
                             </>
                         )}
 
@@ -3413,29 +2340,10 @@ function App() {
                             <>
                                 <h2>Résultat de la caisse</h2>
                                 <p className="overlay-main">
-                                    {overlay.result.caseName} · Mise :{' '}
-                                    {formatNumber(
-                                        overlay.result.spent,
-                                        1,
-                                    )}{' '}
-                                    · Récompense :{' '}
-                                    {formatNumber(
-                                        overlay.result.reward,
-                                        1,
-                                    )}{' '}
-                                    cookies
+                                    {overlay.result.caseName} · Mise : {formatNumber(overlay.result.spent, 1)} · Récompense : {formatNumber(overlay.result.reward, 1)} cookies
                                 </p>
-                                {overlay.result.isJackpot && (
-                                    <p className="overlay-sub">
-                                        🎉 JACKPOT dans la lootbox !
-                                    </p>
-                                )}
-                                {overlay.result.isLoss && (
-                                    <p className="overlay-sub">
-                                        Aïe… petit rappel des probabilités du
-                                        casino.
-                                    </p>
-                                )}
+                                {overlay.result.isJackpot && <p className="overlay-sub">🎉 JACKPOT dans la lootbox !</p>}
+                                {overlay.result.isLoss && <p className="overlay-sub">Aïe… petit rappel des probabilités du casino.</p>}
                             </>
                         )}
 
@@ -3443,37 +2351,13 @@ function App() {
                             <>
                                 <h2>Coup de poker</h2>
                                 <p className="overlay-main">
-                                    {overlay.result.allIn
-                                        ? 'ALL-IN'
-                                        : 'Mise élevée'}
-                                    {' · '}Mise :{' '}
-                                    {formatNumber(
-                                        overlay.result.bet,
-                                        1,
-                                    )}{' '}
-                                    · Résultat :{' '}
-                                    {overlay.result.outcome === 'win'
-                                        ? 'Victoire 🎉'
-                                        : 'Défaite 😬'}{' '}
-                                    (
-                                    {overlay.result.delta >= 0 ? '+' : ''}
-                                    {formatNumber(
-                                        overlay.result.delta,
-                                        1,
-                                    )}{' '}
-                                    cookies)
+                                    {overlay.result.allIn ? 'ALL-IN' : 'Mise élevée'} {' · '}Mise : {formatNumber(overlay.result.bet, 1)} · Résultat : {overlay.result.outcome === 'win' ? 'Victoire 🎉' : 'Défaite 😬'} ({overlay.result.delta >= 0 ? '+' : ''}{formatNumber(overlay.result.delta, 1)} cookies)
                                 </p>
                             </>
                         )}
 
                         <div className="overlay-actions">
-                            <button
-                                type="button"
-                                className="secondary-button"
-                                onClick={closeOverlay}
-                            >
-                                Fermer
-                            </button>
+                            <button type="button" className="secondary-button" onClick={closeOverlay}>Fermer</button>
                         </div>
                     </div>
                 </div>
